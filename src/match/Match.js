@@ -23,6 +23,7 @@ import { Bot } from '../ai/Bot.js';
 import { difficultyFor } from '../ai/Difficulty.js';
 import { botNames } from '../ai/Names.js';
 import { DebugTools, NavDebugView } from '../debug/DebugTools.js';
+import { XRPlayer } from '../xr/XRPlayer.js';
 
 const WEAPON_NAMES = { ar: 'Assault Rifle', shotgun: 'Pump Shotgun', smg: 'SMG', sniper: 'Sniper Rifle', pistol: 'Pistol', rocket: 'Rocket Launcher', grenade: 'Grenade', pickaxe: 'Pickaxe' };
 
@@ -92,6 +93,14 @@ export class Match {
     this.tmpV = new THREE.Vector3();
     this.lastPhaseMsg = null;
     this.aiStats = { cover: 0, grenades: 0, breach: 0, retreats: 0, leads: 0, unstuck: 0 };
+    this.xrPlayer = null;
+    if (game.xr.active) this.ensureXR();
+  }
+
+  /** Create the VR player glue (match started in VR, or VR entered from the pause menu). */
+  ensureXR() {
+    if (!this.xrPlayer) this.xrPlayer = new XRPlayer(this);
+    return this.xrPlayer;
   }
 
   // ---------- flow ----------
@@ -107,7 +116,7 @@ export class Match {
     this.player.pitch = -0.25;
     this.game.audio.setLoop('bus', 0.35);
     this.game.audio.ui('bus');
-    this.hud.centerMessage('THE SKY BUS', this.game.input.touchMode ? 'Tap DROP to jump · MAP shows the route' : 'Press SPACE to jump · Tab/M to see the route', 4);
+    this.hud.centerMessage('THE SKY BUS', this.game.xr.active ? 'Press A to jump · hold the left grip for the map' : this.game.input.touchMode ? 'Tap DROP to jump · MAP shows the route' : 'Press SPACE to jump · Tab/M to see the route', 4);
   }
 
   eject(ch) {
@@ -412,11 +421,15 @@ export class Match {
   // ---------- rendering ----------
   render(alpha, dt) {
     const game = this.game, P = this.player, cam = game.camera;
-    if (P.alive && game.input.active && !this.mapOpen && this.begun) this.controller.look(dt);
+    const vr = game.xr.active && this.xrPlayer;
+    if (vr) { /* head + controllers drive the view */ }
+    else if (P.alive && game.input.active && !this.mapOpen && this.begun) this.controller.look(dt);
     else game.input.consumeMouse(dt);
 
     const lerp = (a, b) => a + (b - a) * alpha;
-    if (P.alive && P.mode === 'bus') {
+    if (vr) {
+      this.xrPlayer.update(alpha, dt);
+    } else if (P.alive && P.mode === 'bus') {
       const bx = lerp(this.bus.prev.x, this.bus.pos.x), bz = lerp(this.bus.prev.z, this.bus.pos.z);
       this.cameraRig.chase(dt, { x: bx, y: this.bus.pos.y, z: bz }, P.yaw, Math.min(0.2, P.pitch), 28);
     } else if (P.alive) {
@@ -427,7 +440,7 @@ export class Match {
       if (t !== P && t.mode !== 'bus') this.spectateYaw += (((t.yaw - this.spectateYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * Math.min(1, dt * 3);
       this.cameraRig.update(dt, { x: lerp(t.prev.x, t.pos.x), y: lerp(t.prev.y, t.pos.y), z: lerp(t.prev.z, t.pos.z), yaw: t === P ? P.yaw : this.spectateYaw, pitch: t === P ? -0.5 : -0.25, height: t.height, mode: t === P ? 'dead' : (t.mode === 'ground' ? 'spectate' : t.mode), ads: false });
     }
-    cam.updateMatrixWorld();
+    if (!vr) cam.updateMatrixWorld();
     const cp = this.cameraRig.pos, cd = this.cameraRig.dir;
     game.audio.setListener(cp.x, cp.y, cp.z, cd.x, cd.y, cd.z);
 
@@ -443,8 +456,11 @@ export class Match {
     const target = inStorm ? 1 : 0;
     this.stormTint = (this.stormTint || 0) + (target - (this.stormTint || 0)) * Math.min(1, dt * 2);
     game.fog.color.copy(game.baseFogColor).lerp(new THREE.Color(0x6a3aa8), this.stormTint * 0.85);
-    game.fog.near = Math.min(150, game.quality.drawDist * 0.3) * (1 - this.stormTint * 0.85);
-    game.fog.far = game.quality.drawDist * (1 - this.stormTint * 0.6);
+    // high up (bus / skydiving) the island is far below: push the fog out so you can pick a landing spot
+    const altitude = Math.max(0, cp.y - Math.max(0, this.world.hm.height(cp.x, cp.z)) - 25);
+    const far = Math.max(game.quality.drawDist, Math.min(1400, game.quality.drawDist + altitude * 2.4));
+    game.fog.near = Math.min(150, far * 0.3) * (1 - this.stormTint * 0.85);
+    game.fog.far = far * (1 - this.stormTint * 0.6);
     this.world.sky.uniforms.uTint.value.set(0x5a2a90);
     this.world.sky.uniforms.uTintAmt.value = this.stormTint * 0.7;
     const edge = this.storm.distToEdge(f.pos.x, f.pos.z);
@@ -464,14 +480,16 @@ export class Match {
 
     this.world.update(dt, this.time, cp, game.fog);
     this.world.render(cp);
-    const hide = this.cameraRig.scoped ? P : null;
+    const hide = vr || this.cameraRig.scoped ? P : null; // VR: first person, your own body stays hidden
     this.charView.render(this.chars, alpha, cam, this.quality.charDist, hide, dt);
     this.effects.update(dt, this.combat.projectiles);
     this.effects.showWeakSpot(P.weakSpot && P.weakSpot.collider.alive ? P.weakSpot : null, P.alive && P.inv.sel === 0 && !this.controller.buildMode);
     this.stormView.update(this.storm, this.time);
     this.bus.render(alpha, this.time);
     if (this.navDebug.enabled) this.navDebug.update(this.nav, f, this.bots);
-    this.hud.update(dt);
+    // VR: the 2D HUD is invisible and only feeds the wrist panel (minimap, texts) -> 10 updates/s are plenty
+    this.hudAcc = (this.hudAcc || 0) + dt;
+    if (!vr || this.hudAcc >= 0.1) { this.hud.update(this.hudAcc); this.hudAcc = 0; }
     game.renderer.render(this.scene, cam);
   }
 
@@ -508,6 +526,7 @@ export class Match {
   }
 
   dispose() {
+    if (this.xrPlayer) { this.xrPlayer.dispose(); this.xrPlayer = null; }
     this.events.clear();
     this.hud.dispose();
     this.debugTools.dispose();

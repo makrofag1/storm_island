@@ -37,6 +37,8 @@ export class Menus {
         </div>
         <div class="menu-buttons">
           <button class="btn primary big" data-act="play">PLAY</button>
+          <button class="btn vr-btn big hidden" data-act="vr">PLAY IN VR</button>
+          <div class="vr-hint hidden"></div>
           <button class="btn" data-act="settings">SETTINGS</button>
           <button class="btn" data-act="controls">CONTROLS</button>
           <button class="btn fs-btn hidden" data-act="fullscreen">FULLSCREEN</button>
@@ -85,6 +87,7 @@ export class Menus {
         <div class="pause-box">
           <h2>Paused</h2>
           <button class="btn primary" data-act="resume">RESUME</button>
+          <button class="btn vr-btn hidden" data-act="vr">CONTINUE IN VR</button>
           <button class="btn" data-act="settings">SETTINGS</button>
           <button class="btn" data-act="controls">CONTROLS</button>
           <button class="btn fs-btn hidden" data-act="fullscreen">FULLSCREEN</button>
@@ -111,7 +114,32 @@ export class Menus {
     this.buildSettings();
     this.updateGpuInfo();
     this.updateTouchUi();
+    this.updateVrUi();
     this.lobbyTimer = null;
+  }
+
+  /** PLAY IN VR when the browser can open an immersive-vr session; on a headset browser without it, explain why. */
+  updateVrUi() {
+    const xr = this.game.xr;
+    if (!xr) return;
+    const ok = xr.supported || xr.sim;
+    this.root.querySelectorAll('.vr-btn').forEach((b) => b.classList.toggle('hidden', !ok));
+    const hint = this.q('.vr-hint');
+    const headset = /OculusBrowser|Quest|Pico|Wolvic|VR/i.test(navigator.userAgent || '');
+    let msg = '';
+    if (!ok && headset) {
+      if (xr.reason === 'insecure') msg = 'VR needs a secure page: open the game over <b>https://</b> (GitHub Pages, or <code>npm run start:https</code> on your PC).';
+      else if (xr.reason === 'blocked' || window.top !== window.self) msg = 'VR is blocked inside this embedded page — open the game in its own tab (GitHub Pages / https link).';
+      else if (xr.reason === 'no-webxr' || xr.reason === 'unsupported') msg = 'This browser has no WebXR VR support — use the Meta Quest Browser.';
+    }
+    hint.innerHTML = msg;
+    hint.classList.toggle('hidden', !msg);
+  }
+
+  vrFailed() {
+    const hint = this.q('.vr-hint');
+    hint.innerHTML = 'Could not start VR. Make sure the headset is on and allow the VR permission prompt, then try again.';
+    hint.classList.remove('hidden');
   }
 
   /** GPU badge on the main menu + help panel explaining how to move the browser to the dedicated GPU. */
@@ -167,6 +195,7 @@ export class Menus {
     const g = this.game;
     switch (act) {
       case 'play': g.startMatch(); break;
+      case 'vr': this.showPause(false); g.startVR(); break;
       case 'settings': this.openPanel('settings'); break;
       case 'controls': this.openPanel('controls'); break;
       case 'fullscreen': goFullscreen(g.input); break;
@@ -218,6 +247,17 @@ export class Menus {
       row('Bots (+ you = players, max 100)', range('botCount', 10, 99, 1, botFmt)),
       row('Bot difficulty', select('difficulty', [['mixed', 'Mixed'], ['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard'], ['expert', 'Expert']])),
       row('Map seed (blank = random)', `<input type="text" data-key="seed" value="${escapeHtml(s.get('seed'))}" placeholder="random" maxlength="24">`),
+      '<h3 class="settings-sub">VR (Meta Quest)</h3>',
+      row('VR movement', select('vrMove', [['stick', 'Smooth (stick)'], ['teleport', 'Teleport']])),
+      row('VR move direction', select('vrMoveDir', [['head', 'Where you look'], ['controller', 'Where the off hand points']])),
+      row('VR turning', select('vrTurn', [['snap', 'Snap turn'], ['smooth', 'Smooth turn']])),
+      row('VR snap angle', select('vrSnapAngle', [[30, '30°'], [45, '45°'], [90, '90°']])),
+      row('VR smooth turn speed', range('vrTurnSpeed', 45, 240, 5, (v) => v + '°/s')),
+      row('VR comfort vignette', select('vrVignette', [['off', 'Off'], ['low', 'Low'], ['strong', 'Strong']])),
+      row('VR dominant hand', select('vrHand', [['right', 'Right (gun in right hand)'], ['left', 'Left']])),
+      row('VR seated play', `<input type="checkbox" data-key="vrSeated" ${s.get('vrSeated') ? 'checked' : ''}>`),
+      row('VR bots (+ you)', range('vrBots', 10, 99, 1, botFmt)),
+      row('VR performance', select('vrQuality', [['balanced', 'Balanced (90 Hz, shadows)'], ['performance', 'Performance (72 Hz, no shadows)']])),
       '<h3 class="settings-sub">Map generation <button class="btn small" data-act="maprandom">Randomize all</button></h3>',
       ...Object.entries(MAP_OPTIONS).map(([k, o]) => row(o.label, select(k, [...o.values, ['random', 'Random']]))),
     ].join('') + '<p class="note">High quality: anti-aliasing applies after a page reload; terrain detail and grass density with the next match. Bots, difficulty, seed and map options apply to the next match. Touch controls switch immediately.</p>';
@@ -226,9 +266,10 @@ export class Menus {
       const out = el.parentElement.querySelector('output');
       const handler = () => {
         let v = el.type === 'checkbox' ? el.checked : el.type === 'range' ? Number(el.value) : el.value;
+        if (key === 'vrSnapAngle') v = Number(v);
         s.set(key, v);
         if (key === 'touchControls') { this.game.input.setTouchMode(this.game.input.resolveTouchSetting()); this.game.applyQuality(); this.updateTouchUi(); }
-        if (out) out.textContent = ['master', 'sfx', 'music'].includes(key) ? Math.round(v * 100) + '%' : key === 'botCount' ? botFmt(v) : v;
+        if (out) out.textContent = ['master', 'sfx', 'music'].includes(key) ? Math.round(v * 100) + '%' : key === 'botCount' || key === 'vrBots' ? botFmt(v) : key === 'vrTurnSpeed' ? v + '°/s' : v;
       };
       el.addEventListener(el.type === 'text' ? 'change' : 'input', handler);
     });
@@ -264,6 +305,7 @@ export class Menus {
   }
 
   lobbyProgress(text, p) {
+    if (this.game.xr && this.game.xr.active) this.game.xrPanel.update({ lines: [text, `${Math.round(p * 100)}%`] });
     this.q('.lobby-status').textContent = text;
     this.q('.lobby-bar i').style.width = (p * 100) + '%';
   }

@@ -13,6 +13,9 @@ import { DebugOverlay } from '../debug/DebugOverlay.js';
 import { CONTEXT_ATTRIBUTES, detectGPU } from './gpu.js';
 import { TouchControls } from '../ui/TouchControls.js';
 import { MAP_OPTIONS } from '../world/MapOptions.js';
+import { XRManager } from '../xr/XRManager.js';
+import { XRPanel } from '../xr/XRPanel.js';
+import { formatTime } from './math.js';
 
 export class Game {
   constructor(canvas, uiRoot) {
@@ -60,6 +63,10 @@ export class Game {
     this.sun.position.copy(this.sunDir).multiplyScalar(200);
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
+    this.xr = new XRManager(this);
+    this.xrPanel = new XRPanel(this.xr);
+    this.xr.on('start', () => this.onVrStart());
+    this.xr.on('end', () => this.onVrEnd());
     this.applyQuality();
 
     this.audio = new AudioEngine(this.settings);
@@ -101,7 +108,7 @@ export class Game {
       if (this.match && this.isPlaying() && !this.paused && !this.match.mapOpen && !this.input.locked && !this.input.touchMode) this.input.requestLock();
     });
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && this.match && this.isPlaying()) this.setPaused(true);
+      if (document.hidden && this.match && this.isPlaying() && !this.xr.presenting) this.setPaused(true);
     });
     this.settings.onChange((k) => this.onSetting(k));
     this.resize();
@@ -113,8 +120,8 @@ export class Game {
 
   start() {
     this.setState('menu');
-    const loop = (t) => { this.frame(t); requestAnimationFrame(loop); };
-    requestAnimationFrame(loop);
+    // setAnimationLoop = requestAnimationFrame on a flat screen, and the headset's own frame loop in VR
+    this.renderer.setAnimationLoop((t) => this.frame(t));
   }
 
   isPlaying() { return this.state === 'bus' || this.state === 'match' || this.state === 'spectate'; }
@@ -123,7 +130,7 @@ export class Game {
     const q = this.quality;
     // phones: never go below 1.0 (tiny screens get blurry), never above 1.0 either (fill rate)
     const pr = this.input.touchMode ? 1.0 : Math.min(2, Math.min(window.devicePixelRatio || 1, q.pixelRatio) * (q.renderScale || 1));
-    this.renderer.setPixelRatio(pr);
+    if (!this.renderer.xr.isPresenting) this.renderer.setPixelRatio(pr); // the headset sets its own resolution
     this.renderer.shadowMap.enabled = q.shadows;
     this.renderer.shadowMap.type = q.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.toneMapping = q.cinematic ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
@@ -156,6 +163,7 @@ export class Game {
   }
 
   resize() {
+    if (this.renderer.xr.isPresenting) return;
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
@@ -167,15 +175,100 @@ export class Game {
     this.state = s;
     this.menus.onState(s);
     if (s === 'menu' || s === 'results') this.input.exitLock();
+    if (this.xr.active) this.vrPanelForState();
+  }
+
+  // ---------- VR ----------
+  /** PLAY IN VR (must run from a click: the browser only opens a headset session on a user gesture). */
+  async startVR() {
+    this.audio.unlock();
+    const ok = await this.xr.start();
+    if (!ok) { this.menus.vrFailed(); return; }
+    if (this.match && this.isPlaying()) { this.match.ensureXR(); if (this.paused) this.showVrPause(); }
+    else this.startMatch({ vr: true });
+  }
+
+  onVrStart() {
+    document.body.classList.add('vr');
+    this.input.xrOnly = true;
+    if (this.xr.presenting) this.input.exitLock();
+    this.input.releaseAll();
+    if (this.match && this.isPlaying()) { this.match.ensureXR(); if (this.paused) this.showVrPause(); else this.xrPanel.hide(); }
+    else this.vrPanelForState();
+  }
+
+  onVrEnd() {
+    document.body.classList.remove('vr');
+    this.input.xrOnly = false;
+    this.xrPanel.hide();
+    if (this.match && this.match.xrPlayer) this.match.xrPlayer.deactivate();
+    if (this.match && this.isPlaying() && !this.paused) this.setPaused(true);
+    this.resize();
+  }
+
+  /** Headset menu opened / headset taken off. */
+  onVrBlur() { if (this.match && this.isPlaying() && !this.paused) this.setPaused(true); }
+
+  vrPanelForState() {
+    const P = this.xrPanel, s = this.state;
+    if (s === 'menu') {
+      P.show({ title: 'STORM ISLAND', lines: ['Battle royale in VR', `${Number(this.settings.get('vrBots')) + 1} players · ${this.settings.get('difficulty')} bots`, 'Point with a controller, press the trigger'],
+        buttons: [{ id: 'play', label: 'PLAY', primary: true }, { id: 'exit', label: 'EXIT VR' }] },
+      (id) => { if (id === 'play') this.startMatch({ vr: true }); else this.xr.end(); });
+    } else if (s === 'lobby') {
+      P.show({ title: 'MATCHMAKING', lines: ['Generating the island...'] }, null);
+    } else if (s === 'results') {
+      const r = this.results;
+      P.show({ title: r && r.won ? 'STORM CHAMPION' : r ? `YOU PLACED #${r.placement}` : 'MATCH OVER',
+        lines: r ? [`${r.kills} eliminations · ${Math.round(r.damage)} damage · ${r.accuracy}% accuracy`, `Survived ${formatTime(r.time)} · ${r.players} players`] : [],
+        buttons: [{ id: 'again', label: 'PLAY AGAIN', primary: true }, { id: 'menu', label: 'MENU' }, { id: 'exit', label: 'EXIT VR' }] },
+      (id) => { if (id === 'again') this.startMatch({ vr: true }); else if (id === 'menu') this.setState('menu'); else this.xr.end(); });
+    } else P.hide();
+  }
+
+  showVrPause(reposition = true) {
+    const st = this.settings;
+    const turn = st.get('vrTurn') === 'smooth' ? 'Smooth turn' : `Snap turn ${st.get('vrSnapAngle')}°`;
+    const move = st.get('vrMove') === 'teleport' ? 'Teleport' : 'Smooth move';
+    const lines = [`${turn} · ${move} · vignette ${st.get('vrVignette')}`];
+    if (!this.xr.hasControllers()) lines.unshift('Pick up your Touch controllers to play');
+    this.xrPanel.show({ title: 'PAUSED', lines, buttons: [
+      { id: 'resume', label: 'RESUME', primary: true }, { id: 'turn', label: 'TURN: ' + (st.get('vrTurn') === 'smooth' ? 'SMOOTH' : 'SNAP') },
+      { id: 'move', label: 'MOVE: ' + (st.get('vrMove') === 'teleport' ? 'TELEPORT' : 'STICK') }, { id: 'vig', label: 'VIGNETTE: ' + String(st.get('vrVignette')).toUpperCase() },
+      { id: 'calib', label: 'RESET HEIGHT' }, { id: 'exit', label: 'EXIT VR' },
+      { id: 'leave', label: 'LEAVE MATCH', danger: true },
+    ] }, (id) => {
+      if (id === 'resume') { this.setPaused(false); return; }
+      if (id === 'turn') st.set('vrTurn', st.get('vrTurn') === 'smooth' ? 'snap' : 'smooth');
+      if (id === 'move') st.set('vrMove', st.get('vrMove') === 'teleport' ? 'stick' : 'teleport');
+      if (id === 'vig') { const o = ['off', 'low', 'strong']; st.set('vrVignette', o[(o.indexOf(st.get('vrVignette')) + 1) % 3]); }
+      if (id === 'calib') { this.xr.calib = 0; this.xr.calibT = 0; this.xr.calibSum = 0; if (this.match) this.match.hud.toast('Stand up straight — measuring your height', '#7fd4ff'); }
+      if (id === 'exit') { this.xr.end(); return; }
+      if (id === 'leave') { this.xrPanel.hide(); this.leaveMatch(this.match && this.match.player && !this.match.player.alive); return; }
+      this.showVrPause(false);
+    }, reposition);
+  }
+
+  showVrDeath() {
+    const m = this.match;
+    if (!m) return;
+    const P = m.player;
+    this.xrPanel.show({ title: 'ELIMINATED', lines: [`You placed #${P.placement || m.aliveCount + 1}`, P.killer ? `by ${P.killer.name}` : '', 'Trigger / A: next player'],
+      buttons: [{ id: 'next', label: 'SPECTATE NEXT', primary: true }, { id: 'leave', label: 'LEAVE MATCH', danger: true }] },
+    (id) => { if (id === 'next') m.nextSpectateTarget(); else { this.xrPanel.hide(); this.leaveMatch(true); } });
   }
 
   /** Menu -> Lobby: build the world while the lobby screen shows, then launch the bus. */
-  startMatch() {
+  startMatch(opts = {}) {
     this.audio.unlock();
     if (this.match) { this.match.dispose(); this.match = null; }
+    const vr = !!opts.vr || this.xr.active;
+    // VR matches use the headset preset and their own (smaller) lobby size
+    this.quality = vr ? QUALITY[this.settings.get('vrQuality') === 'performance' ? 'vrPerf' : 'vr'] : (QUALITY[this.settings.get('quality')] || QUALITY.medium);
+    this.applyQuality();
     this.setState('lobby');
     const seed = resolveSeed(this.settings.get('seed'));
-    const bots = Math.max(10, Math.min(99, Number(this.settings.get('botCount')) || 49));
+    const bots = Math.max(10, Math.min(99, Number(this.settings.get(vr ? 'vrBots' : 'botCount')) || 49));
     const difficulty = this.settings.get('difficulty');
     const map = {};
     for (const k of Object.keys(MAP_OPTIONS)) map[k] = this.settings.get(k);
@@ -193,7 +286,7 @@ export class Game {
         if (!this.match) return;
         this.match.begin();
         this.setState('bus');
-        this.input.requestLock();
+        if (!this.xr.presenting) this.input.requestLock();
       });
     }, 60);
   }
@@ -214,8 +307,9 @@ export class Game {
     if (this.paused === p) return;
     this.paused = p;
     this.menus.showPause(p);
+    if (this.xr.active) { if (p) this.showVrPause(); else this.xrPanel.hide(); }
     if (p) { this.input.exitLock(); this.audio.duck(true); }
-    else { this.input.requestLock(); this.audio.duck(false); this.last = performance.now(); }
+    else { if (!this.xr.presenting) this.input.requestLock(); this.audio.duck(false); this.last = performance.now(); }
   }
 
   onLockChange(locked) {
@@ -245,10 +339,14 @@ export class Game {
     this.frameTimes.push(dt);
     if (this.frameTimes.length > 60) this.frameTimes.shift();
     const m = this.match;
-    this.input.wantLook = !!(m && m.begun && this.isPlaying() && !this.paused && !m.mapOpen);
-    this.touch.setVisible(!!m && m.begun && this.isPlaying() && !this.paused);
+    const vr = this.xr.active;
+    this.xr.poll(dt);
+    this.input.wantLook = !!(m && m.begun && this.isPlaying() && !this.paused && !m.mapOpen) && !vr;
+    this.touch.setVisible(!vr && !!m && m.begun && this.isPlaying() && !this.paused);
     this.touch.update();
+    if (vr) this.vrFrame(m);
     if (m && m.begun && !this.paused) {
+      if (vr && m.xrPlayer) m.xrPlayer.preTick(dt);
       const s0 = performance.now();
       this.acc += dt;
       let steps = 0;
@@ -268,5 +366,15 @@ export class Game {
     }
     this.menus.update(dt);
     this.debug.update(dt);
+  }
+
+  /** VR housekeeping per frame: panel pointers, simulator clicks, controllers put down mid-match. */
+  vrFrame(m) {
+    const xr = this.xr;
+    if (xr.simActive) { const { main } = xr.hands(); if (main && main.pad.trigger > 0.5 && main.prev.trigger <= 0.5) xr.emit('select', main); }
+    const has = xr.hasControllers();
+    if (xr.presenting && m && this.isPlaying() && this.vrHadControllers && !has && !this.paused) this.setPaused(true);
+    this.vrHadControllers = has;
+    this.xrPanel.tick();
   }
 }

@@ -38,6 +38,16 @@ const DEFAULTS = {
   touchAutoFire: true,       // touch: shoot automatically while the crosshair is on an enemy
   touchAimAssist: true,      // touch: crosshair slows down on / gently follows a nearby enemy
   touchLeftFire: true,       // touch: second FIRE button on the left (shoot while aiming with the right thumb)
+  vrMove: 'stick',           // VR locomotion: 'stick' (smooth) | 'teleport'
+  vrMoveDir: 'head',         // stick movement relative to the 'head' or the off-hand 'controller'
+  vrTurn: 'snap',            // 'snap' | 'smooth'
+  vrSnapAngle: 30,           // degrees per snap turn
+  vrTurnSpeed: 120,          // smooth turn, degrees per second
+  vrVignette: 'low',         // comfort vignette during artificial motion: 'off' | 'low' | 'strong'
+  vrHand: 'right',           // dominant hand (gun / trigger hand)
+  vrSeated: false,           // seated play: no physical crouch detection
+  vrBots: 49,                // bot count for VR matches (the headset has a phone-class CPU)
+  vrQuality: 'balanced',     // 'balanced' (90 Hz, shadows) | 'performance' (72 Hz, no shadows / grass)
   ...MAP_DEFAULTS,
   keys: { ...DEFAULT_KEYS },
   v: 2,

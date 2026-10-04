@@ -96,7 +96,9 @@ function groundMove(ch, dt, physics) {
   const len = Math.hypot(it.mx, it.mz);
   const moving = len > 0.05;
   // sprint only when moving roughly forward
-  const fwdDot = moving ? (it.mx * yawDirX(ch.yaw) + it.mz * yawDirZ(ch.yaw)) / len : 0;
+  // (VR: the body faces where you walk — moveYaw — while yaw follows the gun hand)
+  const fy = ch.moveYaw ?? ch.yaw;
+  const fwdDot = moving ? (it.mx * yawDirX(fy) + it.mz * yawDirZ(fy)) / len : 0;
   let speed = WALK_SPEED;
   ch.sprinting = false;
   if (ch.swimming) speed = SWIM_SPEED;
@@ -191,7 +193,7 @@ function freefall(ch, dt, physics) {
 
 function glide(ch, dt, physics) {
   const it = ch.intent;
-  const fx = yawDirX(ch.yaw), fz = yawDirZ(ch.yaw);
+  const fx = yawDirX(ch.moveYaw ?? ch.yaw), fz = yawDirZ(ch.moveYaw ?? ch.yaw);
   const base = it.dive ? 22 : it.slow ? 9 : 15;
   const tx = fx * base * 0.55 + it.mx * base * 0.6, tz = fz * base * 0.55 + it.mz * base * 0.6;
   approachVec(ch.vel, tx, tz, 14 * dt);

@@ -35,6 +35,8 @@ export class Input {
     this.mouseDown = [false, false, false];
     this.mousePressed = [false, false, false];
     this.mouseReleased = [false, false, false];
+    this.rawMouse = [false, false, false]; // physical buttons (VR simulator reads these; mouseDown may be driven by controllers)
+    this.xrOnly = false;        // VR: game actions come only from the controllers (virtual actions)
     this.dx = 0; this.dy = 0;
     this.wheel = 0;
     this.locked = false;
@@ -175,9 +177,10 @@ export class Input {
   mouseDownEv(e) {
     const ok = this.locked || (this.freeMouse && this.wantLook && e.target === this.canvas);
     if (!ok) return;
-    if (e.button < 3) { this.mouseDown[e.button] = true; this.mousePressed[e.button] = true; }
+    if (e.button < 3) { this.mouseDown[e.button] = true; this.mousePressed[e.button] = true; this.rawMouse[e.button] = true; }
   }
   mouseUpEv(e) {
+    if (e.button < 3) this.rawMouse[e.button] = false;
     if (e.button < 3) { if (this.mouseDown[e.button]) this.mouseReleased[e.button] = true; this.mouseDown[e.button] = false; }
   }
   mouseMove(e) {
@@ -196,10 +199,12 @@ export class Input {
   releaseAll() {
     this.down.clear();
     this.mouseDown = [false, false, false];
+    this.rawMouse = [false, false, false];
   }
 
   key(action) {
     if (this.virt.has(action)) return true;
+    if (this.xrOnly) return false;
     const code = this.settings.data.keys[action];
     // Ctrl only crouches when the keyboard is locked (fullscreen): otherwise Ctrl+W (crouch + forward)
     // closes the browser tab and no web page can stop that
@@ -208,6 +213,7 @@ export class Input {
   }
   pressed(action) {
     if (this.virtPressed.has(action)) return true;
+    if (this.xrOnly) return false;
     const code = this.settings.data.keys[action];
     return code ? this.pressedSet.has(code) : false;
   }

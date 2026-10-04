@@ -13,6 +13,7 @@ export class HUD {
   constructor(match) {
     this.match = match;
     this.game = match.game;
+    this.xr = null; // XRHud while playing in VR
     const root = document.createElement('div');
     root.id = 'hud';
     root.innerHTML = `
@@ -152,6 +153,7 @@ export class HUD {
   }
 
   toast(text, color = '#fff') {
+    if (this.xr) this.xr.toast(text, color); // VR HUD mirror
     const d = document.createElement('div');
     d.className = 'toast';
     d.style.color = color;
@@ -163,12 +165,14 @@ export class HUD {
   }
 
   centerMessage(text, sub = '', dur = 3, cls = '') {
+    if (this.xr) this.xr.centerMessage(text, sub, dur);
     this.el.centerMsg.innerHTML = `<div class="cm-main ${cls}">${text}</div>${sub ? `<div class="cm-sub">${sub}</div>` : ''}`;
     this.el.centerMsg.classList.add('show');
     this.centerT = dur;
   }
 
   killfeed(html, highlight = false) {
+    if (this.xr) this.xr.killfeed(html);
     const d = document.createElement('div');
     d.className = 'kf' + (highlight ? ' kf-me' : '');
     d.innerHTML = html;

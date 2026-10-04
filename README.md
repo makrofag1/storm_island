@@ -16,6 +16,7 @@ It's a static site — no backend, no accounts. Any static file server works:
 
 ```bash
 node server.mjs          # zero-dependency server -> http://localhost:5173
+npm run start:https      # same over https://<your PC's LAN IP>:5174 (self-signed) — needed for VR on a Quest
 npx serve .              # or
 python -m http.server 5173
 ```
@@ -116,6 +117,7 @@ iPhone use *Share → Add to Home Screen* for a full-screen web app.
 | USE | Appears next to loot and chests |
 | BUILD / EDIT | Top row next to MAP / MENU: build mode (tap hotbar slots for wall/floor/stairs/roof) / edit your wall or floor |
 | Hotbar | Tap a slot to select it |
+| MAP / ⏸ | Map (tap to place a marker, tap it again to clear) / pause & settings |
 
 Touch aiming helpers (each can be turned off in Settings):
 
@@ -126,9 +128,62 @@ Touch aiming helpers (each can be turned off in Settings):
   snaps most of the way onto an enemy close to the crosshair. Only visible enemies count. In a test
   (bot strafing at 8 m/s 22 m away, you strafing, no aiming input) assist + auto-fire landed 5–8 hits
   in 6 s versus 0 without — it helps, but you still have to keep tracking.
-| MAP / ⏸ | Map (tap to place a marker, tap it again to clear) / pause & settings |
 
 First launch on a phone defaults to the Low quality preset; Settings → Touch look sensitivity tunes aiming.
+
+### VR — Meta Quest 3 (WebXR immersive-vr)
+
+Full first-person VR in the **Meta Quest Browser**: stereo rendering with 6DOF head tracking, the gun
+in your hand (you aim with the controller — shots leave the muzzle you see), real walking in your play
+space, physical crouching, Touch controller buttons, haptics, a wrist HUD and comfort options.
+
+**Open it on the headset** — WebXR only runs on secure (`https://`) pages:
+
+* **GitHub Pages** (recommended): `https://<user>.github.io/<repo>/` → **PLAY IN VR**.
+* **From your PC on the home network**: `npm run start:https`, then open the printed
+  `https://192.168.x.x:5174` address in the Quest Browser. The certificate is self-signed (created in
+  `.cert/` with the openssl that ships with Git for Windows), so the browser warns once — *Advanced →
+  Proceed*. Plain `http://192.168…` pages cannot start VR.
+* Embedded pages (e.g. the claude.ai artifact) usually block VR; the menu then explains where to open it.
+
+**Controls** (right-handed; *Settings → VR dominant hand* mirrors everything):
+
+| Controller | Action |
+|---|---|
+| Left stick | Move (analog) · click = sprint toggle · *teleport mode*: push forward to aim the arc, release to jump (8 m, ground only) |
+| Right stick ← → | Snap turn (30/45/90°) or smooth turn |
+| Right stick ↑ ↓ | Next / previous slot · build mode: next / previous piece |
+| Right trigger | Fire / use item / place piece · grenades are thrown on **release** with your real hand speed |
+| Swing the pickaxe | A fast swing of the right hand hits (the trigger works too) |
+| Left trigger | Aim down sights (tighter spread) · build mode: switch material |
+| Right grip | Grab loot near your hand, open a chest you touch, or pick up what the gun points at |
+| A | Jump · jump from the bus · deploy glider |
+| B | Reload · build mode: rotate stairs |
+| X | Build mode on / off |
+| Y | Pause menu (resume, turn / move / vignette options, reset height, exit VR, leave match) |
+| Right stick click | Crouch toggle · build mode: edit the wall / floor you point at |
+| Left grip (hold) | Enlarge the wrist HUD (minimap) |
+| Duck in real life | Crouch (off in *seated* mode) |
+
+**HUD**: look at your left wrist — health / shield, ammo, materials, hotbar, minimap, storm timer and
+kill feed. Announcements, pickup prompts (*GRIP: Pick up…*) and toasts appear low in your view, red
+arcs show where damage comes from, and a laser + dot from the muzzle turns red on enemies.
+
+**Comfort**: snap turn by default, optional smooth turn (speed adjustable), smooth stick movement or
+teleport, a tunnelling vignette during artificial motion (off / low / strong), your view is always at
+the character's eye height (measured from your real height at the start; *Reset height* in the pause
+menu), real steps are blocked by walls just like stick movement, and the view never shakes or recoils
+(the gun in your hand kicks instead). Panels are clicked with the controller laser or a hand-tracking
+pinch; gameplay needs the Touch controllers (putting them down pauses the game).
+
+**Performance**: VR matches use their own preset (320 m draw distance, 1024 shadow map over 35 m, sparse
+grass, fixed foveated rendering, 90 Hz requested) and 49 bots by default (*Settings → VR bots*).
+*VR performance → Performance* drops shadows and grass and runs at 72 Hz. If the frame rate still stays
+below ~60 fps, the game turns off shadows, then grass, automatically.
+
+**Testing without a headset**: `?vrsim=1` runs the same VR code on a flat screen (head = mouse look, hands
+in front of the camera; WASD = left stick, Q/E = turn, wheel = slots, LMB/RMB = triggers, Space = A,
+R = B, B = X, P = Y, F = grip, C = stick click, Shift = sprint, M = map, H = swing hand, G = duck).
 
 ## Settings
 
@@ -141,6 +196,7 @@ First launch on a phone defaults to the Low quality preset; Settings → Touch l
 | Bots | 10–99 (+ you = up to 100 players, next match) |
 | Bot difficulty | Easy / Medium / Hard / Expert / Mixed (default) |
 | Map seed | blank = random; same seed + same map options = same island |
+| VR | Movement (stick / teleport), move direction (head / off-hand controller), snap or smooth turning, snap angle, smooth turn speed, comfort vignette, dominant hand, seated play, bots in VR matches (default 49), performance mode |
 | Map generation | Island size (small/normal/large), terrain (flat/hills/mountains — adds a 2nd peak), season / biome (summer/autumn/winter/desert — terrain, trees, grass, sky, fog, snowy roofs), water (lake / no lake / archipelago with swimmable sea channels), buildings (few/normal/many) and vegetation (sparse/normal/dense); each can be Random, or Randomize all |
 
 Settings and bindings are stored in `localStorage`.
@@ -198,6 +254,10 @@ src/ui/                  HUD (bars, hotbar, minimap, compass, kill feed, map, da
                          Menus, Icons, TouchControls (joystick, look, buttons)
 src/audio/               AudioEngine (procedural SFX, loops, generated lobby music, 3D panning)
 src/vfx/                 Effects (debris, glow particles, smoke, tracers, decals, storm wall)
+src/xr/                  WebXR VR: XRManager (session, play-space rig, controllers, haptics, ?vrsim=1),
+                         XRPlayer (first-person rig, room-scale walking, input mapping, held weapon,
+                         grab / swing / throw), XRHud (wrist panel + head-locked messages), XRPanel
+                         (laser-clicked menus), XRComfort (vignette, teleport arc), xrLogic (pure helpers)
 src/debug/               DebugOverlay (F3), DebugTools (?debug=1) + nav-grid visualization
 tests/                   node:test logic tests
 tools/use-nvidia-gpu.ps1 assigns browsers to the high-performance GPU (Windows)
@@ -277,4 +337,6 @@ tools/build-single.mjs   single-file build (esbuild) -> dist/
 `npm test` covers: seeded RNG + deterministic heightmap, shield/health damage, headshot/rarity/falloff,
 healing caps, loot tables, inventory stacking/swapping, all storm phases (circles nested, closes),
 storm interpolation, A* (straight, around walls, partial paths), ramp surfaces, build-grid keys/bounds/
-helpers, and GPU renderer-string detection.
+helpers, GPU renderer-string detection, and the VR helpers (controller button mapping with edges and
+hysteresis, snap / smooth turn direction, turning around the head, physical crouch, teleport targets,
+hand velocity).

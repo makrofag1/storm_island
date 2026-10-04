@@ -269,6 +269,11 @@ body.touch .bar span { font-size: 11px; line-height: 14px; }
 .killfeed .persona { margin-right: 3px; font-size: 0.9em; }
 /* #hud is position:fixed (its own stacking context): lift the whole HUD above the touch layer so the
    tappable parts (hotbar slots, map, spectate buttons) receive touches; the rest stays click-through */
+/* VR: the 2D HUD / touch controls are not shown (the headset gets the wrist HUD instead) */
+body.vr #hud, body.vr #touch { display: none !important; }
+.btn.vr-btn { background: linear-gradient(180deg, #7a5cff, #4a2fd0); color: #fff; }
+.vr-hint { max-width: 340px; font-size: 13px; line-height: 1.4; color: #ffe08a; background: rgba(0,0,0,0.45); padding: 8px 10px; border-radius: 8px; }
+.vr-hint code { color: #fff; }
 body.touch #hud { z-index: 6; }
 .settings-sub { margin: 18px 0 6px; color: #ffe14a; font-size: 18px; }
 /* left FIRE (shoot with the left thumb while the right thumb aims) */

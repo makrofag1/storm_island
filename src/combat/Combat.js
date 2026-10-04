@@ -8,6 +8,7 @@ import { yawDirX, yawDirZ } from '../core/math.js';
 
 const hit = makeHit();
 const hit2 = makeHit();
+const _org = { x: 0, y: 0, z: 0 };
 const tmpList = [];
 const PICKAXE_RANGE = 2.9;
 
@@ -102,9 +103,26 @@ export class Combat {
     this.ctx.events.emit('reloadStart', { ch, type: cur.type });
   }
 
+  /**
+   * Where shots start: the eyes, or (VR) the muzzle of the gun in the player's hand — unless the
+   * muzzle pokes through a wall, then the eyes again (no shooting through walls by reaching).
+   */
+  shotOrigin(ch, out) {
+    out.x = ch.pos.x; out.y = ch.eyeY; out.z = ch.pos.z;
+    const o = ch.aimOrigin;
+    if (!o) return out;
+    const dx = o.x - out.x, dy = o.y - out.y, dz = o.z - out.z, l = Math.hypot(dx, dy, dz);
+    if (l < 1e-3) return out;
+    if (l > 1.6) return out; // stale / bogus origin
+    this.physics.raycast(out.x, out.y, out.z, dx / l, dy / l, dz / l, l + 0.05, null, hit2);
+    if (!hit2.hit) { out.x = o.x; out.y = o.y; out.z = o.z; }
+    return out;
+  }
+
   /** Aim direction for a character (player: towards camera aim point; bots: aimDir). */
-  aimDir(ch, out) {
-    const ex = ch.pos.x, ey = ch.eyeY, ez = ch.pos.z;
+  aimDir(ch, out, origin) {
+    const o = origin || this.shotOrigin(ch, _org);
+    const ex = o.x, ey = o.y, ez = o.z;
     if (ch.aimPoint) {
       let dx = ch.aimPoint.x - ex, dy = ch.aimPoint.y - ey, dz = ch.aimPoint.z - ez;
       const l = Math.hypot(dx, dy, dz);
@@ -133,12 +151,14 @@ export class Combat {
     ch.stats.shots++;
     ch.lastShotT = ctx.time();
     ch.anim.fire = 1;
-    const dir = this.aimDir(ch, { x: 0, y: 0, z: 0 });
+    const org = this.shotOrigin(ch, { x: 0, y: 0, z: 0 });
+    const dir = this.aimDir(ch, { x: 0, y: 0, z: 0 }, org);
     const spread = this.spreadFor(ch, def, cur, ads);
-    const ex = ch.pos.x, ey = ch.eyeY, ez = ch.pos.z;
-    // muzzle (visual only)
+    const ex = org.x, ey = org.y, ez = org.z;
+    // muzzle (visual only; VR shots already start at the real muzzle)
     const rx = Math.cos(ch.yaw), rz = -Math.sin(ch.yaw);
-    const mx = ex + dir.x * 0.9 + rx * 0.3, my = ey - 0.25 + dir.y * 0.9, mz = ez + dir.z * 0.9 + rz * 0.3;
+    const vr = !!ch.aimOrigin;
+    const mx = vr ? ex : ex + dir.x * 0.9 + rx * 0.3, my = vr ? ey : ey - 0.25 + dir.y * 0.9, mz = vr ? ez : ez + dir.z * 0.9 + rz * 0.3;
     let anyHit = false;
     for (let p = 0; p < def.pellets; p++) {
       const d = applySpread(dir, def.pellets > 1 ? spread * (0.35 + 0.65 * Math.random()) : spread, this.rng);
@@ -178,8 +198,9 @@ export class Combat {
     const ctx = this.ctx;
     ch.swingCd = 0.6;
     ch.swingAnim = 1;
-    const dir = this.aimDir(ch, { x: 0, y: 0, z: 0 });
-    const ex = ch.pos.x, ey = ch.eyeY, ez = ch.pos.z;
+    const org = this.shotOrigin(ch, { x: 0, y: 0, z: 0 });
+    const dir = this.aimDir(ch, { x: 0, y: 0, z: 0 }, org);
+    const ex = org.x, ey = org.y, ez = org.z;
     this.physics.raycast(ex, ey, ez, dir.x, dir.y, dir.z, PICKAXE_RANGE, { chars: true, ignore: ch }, hit);
     ctx.events.emit('swing', { ch });
     if (!hit.hit) return;
@@ -226,12 +247,18 @@ export class Combat {
   }
 
   throwGrenade(ch, slot) {
-    const dir = this.aimDir(ch, { x: 0, y: 0, z: 0 });
+    const org = this.shotOrigin(ch, { x: 0, y: 0, z: 0 });
+    const dir = this.aimDir(ch, { x: 0, y: 0, z: 0 }, org);
     ch.inv.consumeAt(slot);
     ch.fireCd = 0.8;
     ch.anim.fire = 1;
     const sp = 21;
-    this.spawnProjectile(ch, 'grenade', 0, ch.pos.x + dir.x * 0.6, ch.eyeY, ch.pos.z + dir.z * 0.6, dir.x * sp, dir.y * sp + 5, dir.z * sp);
+    if (ch.throwVel) {
+      // VR: thrown with the real hand velocity
+      const v = ch.throwVel; ch.throwVel = null;
+      this.spawnProjectile(ch, 'grenade', 0, org.x, org.y, org.z, v.x, v.y, v.z);
+    } else if (ch.aimOrigin) this.spawnProjectile(ch, 'grenade', 0, org.x, org.y, org.z, dir.x * sp, dir.y * sp + 5, dir.z * sp);
+    else this.spawnProjectile(ch, 'grenade', 0, ch.pos.x + dir.x * 0.6, ch.eyeY, ch.pos.z + dir.z * 0.6, dir.x * sp, dir.y * sp + 5, dir.z * sp);
     this.ctx.events.emit('throw', { ch });
   }
 

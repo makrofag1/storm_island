@@ -35,6 +35,15 @@ export class PlayerController {
     ch.aimPoint = { x: 0, y: 0, z: 0 };
   }
 
+  /** Active VR player glue (headset or simulator), else null. */
+  get vr() { const x = this.match.xrPlayer; return x && this.match.game.xr.active ? x : null; }
+
+  /** Aim ray: the camera (flat screen) or the dominant controller (VR). */
+  aimRay() {
+    const vr = this.vr;
+    return vr ? { pos: vr.aimPos, dir: vr.aimDir } : this.match.cameraRig;
+  }
+
   /** Per render frame: mouse look. */
   look(dt) {
     const [dx, dy] = this.input.consumeMouse(dt);
@@ -65,7 +74,7 @@ export class PlayerController {
    */
   aimAssist(dt, active, ads) {
     const ch = this.ch, m = this.match, inp = this.input;
-    if (!inp.touchMode || !this.settings.get('touchAimAssist') || ch.mode !== 'ground' || this.buildMode || this.editPiece) { this.assistTarget = null; this.assistPrev = null; return 1; }
+    if (this.vr || !inp.touchMode || !this.settings.get('touchAimAssist') || ch.mode !== 'ground' || this.buildMode || this.editPiece) { this.assistTarget = null; this.assistPrev = null; return 1; }
     const cur = ch.inv.current();
     if (!cur || cur.kind !== 'weapon') { this.assistTarget = null; this.assistPrev = null; return 1; }
     const cam = m.cameraRig;
@@ -120,6 +129,7 @@ export class PlayerController {
 
   addRecoil(amount) {
     const ch = this.ch;
+    if (this.vr) { this.vr.onRecoil(amount); return; } // VR: the gun in your hand kicks, the view never moves
     const k = ch.intent.aim ? 0.6 : 1;
     ch.pitch += amount * k;
     ch.yaw += (Math.random() - 0.5) * amount * 0.4 * k;
@@ -139,7 +149,8 @@ export class PlayerController {
     let s = (inp.key('right') ? 1 : 0) - (inp.key('left') ? 1 : 0);
     const ax = inp.axis;
     if (Math.abs(ax.x) + Math.abs(ax.y) > 0.05) { f = ax.y; s = ax.x; } // touch joystick (analog)
-    const fx = yawDirX(ch.yaw), fz = yawDirZ(ch.yaw);
+    const myaw = this.vr ? this.vr.moveYaw : ch.yaw; // VR: walk where you look (or where the off hand points)
+    const fx = yawDirX(myaw), fz = yawDirZ(myaw);
     const rx = -fz, rz = fx;
     let mx = fx * f + rx * s, mz = fz * f + rz * s;
     const l = Math.hypot(mx, mz);
@@ -148,7 +159,7 @@ export class PlayerController {
     it.sprint = inp.key('sprint') || ax.sprint;
     it.jump = inp.key('jump');
     it.crouch = inp.key('crouch');
-    it.dive = (ch.mode === 'freefall' || ch.mode === 'glide') && f > 0 && ch.pitch < -0.35;
+    it.dive = (ch.mode === 'freefall' || ch.mode === 'glide') && f > 0 && (this.vr ? this.vr.headPitchWorld : ch.pitch) < -0.35;
     it.slow = (ch.mode === 'freefall' || ch.mode === 'glide') && f < 0;
     if (ch.mode === 'freefall' || ch.mode === 'glide') it.jump = inp.pressed('jump');
     if (inp.pressed('shoulder')) m.cameraRig.shoulder *= -1;
@@ -167,12 +178,12 @@ export class PlayerController {
     else if (this.buildMode) this.tickBuild(it, wheel);
     else this.tickCombat(it, wheel);
 
-    // aim point from the camera ray
-    const cam = m.cameraRig;
+    // aim point from the camera ray (VR: from the muzzle along the controller)
+    const cam = this.aimRay();
     m.physics.raycast(cam.pos.x, cam.pos.y, cam.pos.z, cam.dir.x, cam.dir.y, cam.dir.z, 1000, { chars: true, ignore: ch }, hit);
     // ignore hits behind the player (between camera and character)
     const toCh = (ch.pos.x - cam.pos.x) * cam.dir.x + (ch.eyeY - cam.pos.y) * cam.dir.y + (ch.pos.z - cam.pos.z) * cam.dir.z;
-    if (hit.hit && hit.t < toCh - 0.2) {
+    if (hit.hit && hit.t < toCh - 0.2 && !this.vr) {
       m.physics.raycast(cam.pos.x + cam.dir.x * toCh, cam.pos.y + cam.dir.y * toCh, cam.pos.z + cam.dir.z * toCh, cam.dir.x, cam.dir.y, cam.dir.z, 1000, { chars: true, ignore: ch }, hit);
     }
     ch.aimPoint.x = hit.x; ch.aimPoint.y = hit.y; ch.aimPoint.z = hit.z;
@@ -210,7 +221,7 @@ export class PlayerController {
     const cur = inv.current();
     // touch auto-fire: shoot while the crosshair rests on an enemy (after a short 70 ms settle)
     const tgt = this.aimChar;
-    const canAuto = inp.touchMode && this.settings.get('touchAutoFire') && cur && cur.kind === 'weapon' && cur.mag > 0 && ch.reloadT <= 0 && ch.mode === 'ground'
+    const canAuto = !this.vr && inp.touchMode && this.settings.get('touchAutoFire') && cur && cur.kind === 'weapon' && cur.mag > 0 && ch.reloadT <= 0 && ch.mode === 'ground'
       && tgt && tgt.alive && tgt.hittable && Math.hypot(tgt.pos.x - ch.pos.x, tgt.pos.z - ch.pos.z) <= WEAPONS[cur.type].range;
     this.autoFireT = canAuto ? this.autoFireT + 1 / 60 : 0;
     const auto = canAuto && this.autoFireT >= 0.07;
@@ -272,7 +283,7 @@ export class PlayerController {
     const m = this.match, ch = this.ch;
     if (this.editPiece) { this.editPiece = null; m.build.ghost.hideEdit(); return; }
     if (ch.mode !== 'ground') return;
-    const cam = m.cameraRig;
+    const cam = this.aimRay();
     m.physics.raycast(cam.pos.x, cam.pos.y, cam.pos.z, cam.dir.x, cam.dir.y, cam.dir.z, 9, null, hit);
     const o = hit.hit && hit.kind === 'collider' ? hit.collider.owner : null;
     if (o && o.kind === 'build' && o.owner === ch && (o.type === 'wall' || o.type === 'floor')) {
@@ -286,7 +297,7 @@ export class PlayerController {
     it.fire = false; it.aim = false; it.firePressed = false; it.reload = false;
     if (!p.alive) { this.editPiece = null; m.build.ghost.hideEdit(); return; }
     // tile under the crosshair: intersect the camera ray with the piece plane
-    const cam = m.cameraRig;
+    const cam = this.aimRay();
     let hover = null;
     const b = p.bounds;
     let t = -1;
