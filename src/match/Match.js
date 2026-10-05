@@ -116,7 +116,7 @@ export class Match {
     this.player.pitch = -0.25;
     this.game.audio.setLoop('bus', 0.35);
     this.game.audio.ui('bus');
-    this.hud.centerMessage('THE SKY BUS', this.game.xr.active ? 'Press A to jump · hold the left grip for the map' : this.game.input.touchMode ? 'Tap DROP to jump · MAP shows the route' : 'Press SPACE to jump · Tab/M to see the route', 4);
+    this.hud.centerMessage('THE SKY BUS', this.game.xr.active ? 'Press A to jump · look at a controller to see its buttons' : this.game.input.touchMode ? 'Tap DROP to jump · MAP shows the route' : 'Press SPACE to jump · Tab/M to see the route', 4);
   }
 
   eject(ch) {
@@ -481,7 +481,7 @@ export class Match {
     this.world.update(dt, this.time, cp, game.fog);
     this.world.render(cp);
     const hide = vr || this.cameraRig.scoped ? P : null; // VR: first person, your own body stays hidden
-    this.charView.render(this.chars, alpha, cam, this.quality.charDist, hide, dt);
+    this.charView.render(this.chars, alpha, cam, this.quality.charDist, hide, dt, vr ? this.cameraRig : null);
     this.effects.update(dt, this.combat.projectiles);
     this.effects.showWeakSpot(P.weakSpot && P.weakSpot.collider.alive ? P.weakSpot : null, P.alive && P.inv.sel === 0 && !this.controller.buildMode);
     this.stormView.update(this.storm, this.time);
@@ -490,6 +490,7 @@ export class Match {
     // VR: the 2D HUD is invisible and only feeds the wrist panel (minimap, texts) -> 10 updates/s are plenty
     this.hudAcc = (this.hudAcc || 0) + dt;
     if (!vr || this.hudAcc >= 0.1) { this.hud.update(this.hudAcc); this.hudAcc = 0; }
+    if (vr) this.xrPlayer.preRender();
     game.renderer.render(this.scene, cam);
   }
 

@@ -4,20 +4,25 @@
 // motion, haptics, wrist HUD and comfort vignette.
 import * as THREE from 'three';
 import { moveHorizontal } from '../player/Motor.js';
-import { weaponGeometry, consumableGeometry } from '../world/Models.js';
 import { WEAPONS, CONSUMABLES } from '../combat/Items.js';
 import { RARITIES, CHAR_HEIGHT, CROUCH_HEIGHT } from '../core/config.js';
-import { yawTo, clamp } from '../core/math.js';
+import { yawTo, clamp, wrapAngle } from '../core/math.js';
+import { makeHit } from '../world/Physics.js';
 import { tryPickup, openChest } from '../player/Interactions.js';
 import { mapActions, emptyPad, snapTurn, smoothTurn, rigOrigin, localToWorldXZ, physicalCrouch } from './xrLogic.js';
 import { XRHud } from './XRHud.js';
 import { Vignette, TeleportArc } from './XRComfort.js';
+import { XRHints } from './XRHints.js';
+import { makeHeldItem, disposeHeldItem } from './XRWeapons.js';
+import { XRGlider } from './XRGlider.js';
 
 const STAND_EYE = CHAR_HEIGHT - 0.22;
 const _v = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const near = [];
+const camHit = makeHit();
 
 function gloveGeometry(mirror) {
   const parts = [];
@@ -52,9 +57,9 @@ export class XRPlayer {
     this.swingHold = 0; this.swingWas = false; this.throwArmed = false;
     this.recoil = 0; this.hitFlash = 0; this.turnRate = 0; this.tpCd = 0;
     this.actions = mapActions(emptyPad(), emptyPad(), emptyPad(), emptyPad());
-    this.muzzleZ = -0.5;
+    this.aimY = 0.05; this.aimZ = -0.1; this.physAds = false; this.adsWas = false;
     this.spectatePos = null;
-    this.deathPanel = false;
+    this.specTarget = null; this.specYaw = 0; this.specTurn = 0;
     const P = match.player;
     P.aimOrigin = { x: P.pos.x, y: P.eyeY, z: P.pos.z };
     this.xr.rigYaw = P.yaw;
@@ -63,6 +68,7 @@ export class XRPlayer {
     match.hud.xr = this.hud;
     this.vignette = new Vignette(this.game.camera);
     this.arc = new TeleportArc(match.scene);
+    this.hints = new XRHints(this.xr);
 
     // gloves on both grips (hidden for tracked hands, which draw their joints instead)
     this.gloveMat = new THREE.MeshLambertMaterial({ color: 0x2f3542 });
@@ -74,8 +80,9 @@ export class XRPlayer {
     // item in the dominant hand (position = grip, orientation = aim ray, so what you see is where you shoot)
     this.held = new THREE.Group();
     this.xr.rig.add(this.held);
-    this.heldMeshes = {};
-    this.heldKey = null;
+    this.heldItems = {};
+    this.heldItem = null;
+    this.glider = new XRGlider(match.scene, P.skin.glider);
     // aim laser + dot
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
@@ -107,10 +114,12 @@ export class XRPlayer {
     this.match.hud.xr = null;
     this.vignette.dispose();
     this.arc.dispose();
+    this.hints.dispose();
     for (const g of this.gloves) g.removeFromParent();
     this.gloveMat.dispose();
     this.held.removeFromParent();
-    for (const k in this.heldMeshes) { this.heldMeshes[k].geometry.dispose(); this.heldMeshes[k].material.dispose(); }
+    for (const k in this.heldItems) disposeHeldItem(this.heldItems[k]);
+    this.glider.dispose();
     this.laser.removeFromParent(); this.dot.removeFromParent();
     this.laser.geometry.dispose(); this.laser.material.dispose(); this.dot.geometry.dispose(); this.dot.material.dispose();
     this.releaseInput();
@@ -143,17 +152,17 @@ export class XRPlayer {
     this.calibrate(dt);
     if (!P.aimOrigin) P.aimOrigin = { x: P.pos.x, y: P.eyeY, z: P.pos.z };
 
-    // turning (also while spectating)
     this.turnRate = 0;
-    if (s.get('vrTurn') === 'smooth') { const d = smoothTurn(A.turnX, s.get('vrTurnSpeed'), dt); xr.rigYaw += d; this.turnRate = Math.abs(d) / Math.max(1e-3, dt); }
-    else xr.rigYaw += snapTurn(A.turnFlick, s.get('vrSnapAngle'));
-
     if (!P.alive) {
+      // spectating: the camera turns with the watched player by itself; trigger / A = next player
       this.releaseInput();
       if (A.firePressed || A.jumpPressed) m.nextSpectateTarget();
       this.prevHead = null;
       return;
     }
+    // turning
+    if (s.get('vrTurn') === 'smooth') { const d = smoothTurn(A.turnX, s.get('vrTurnSpeed'), dt); xr.rigYaw += d; this.turnRate = Math.abs(d) / Math.max(1e-3, dt); }
+    else xr.rigYaw += snapTurn(A.turnFlick, s.get('vrSnapAngle'));
 
     // room-scale: real steps move the character (blocked by walls like stick movement)
     const h = xr.headLocal;
@@ -218,8 +227,11 @@ export class XRPlayer {
     if (!fire && inp.mouseDown[0]) inp.mouseReleased[0] = true;
     inp.mouseDown[0] = fire;
     if (firePressed) inp.mousePressed[0] = true;
-    inp.mouseDown[2] = A.aim;
-    if (A.aimPressed) inp.mousePressed[2] = true;
+    // aiming: left trigger, or physically bringing the sights up to your eye
+    const ads = A.aim || (this.physAds && !building);
+    inp.mouseDown[2] = ads;
+    if ((A.aimPressed || (ads && !this.adsWas)) && (!building || A.aimPressed)) inp.mousePressed[2] = true;
+    this.adsWas = ads;
 
     // aim ray for this tick (rig at the current, non-interpolated position)
     this.placeRig(P.pos.x, P.pos.y, P.pos.z);
@@ -268,7 +280,8 @@ export class XRPlayer {
       this.aimDir.set(0, 0, -1).applyQuaternion(_q).normalize();
       this.aimPos.setFromMatrixPosition(main.grip.matrixWorld);
       // muzzle of the held gun (same offset the held model uses)
-      _v.set(0, 0.05, P.inv.sel === 0 ? -0.1 : this.muzzleZ).applyQuaternion(_q);
+      // shots leave from the front sight on the sight line (pickaxe / items: in front of the hand)
+      _v.set(0, this.aimY, this.aimZ).applyQuaternion(_q);
       this.aimPos.add(_v);
     } else {
       const cam = this.game.camera;
@@ -354,17 +367,8 @@ export class XRPlayer {
       this.placeRig(lerp(b.prev.x, b.pos.x) - b.dir.x * 2.6, b.pos.y + 1.75, lerp(b.prev.z, b.pos.z) - b.dir.z * 2.6);
     } else if (P.alive) {
       this.placeRig(lerp(P.prev.x, P.pos.x), lerp(P.prev.y, P.pos.y), lerp(P.prev.z, P.pos.z));
-      this.deathPanel = false;
-    } else {
-      // spectating: float behind / above the target, smoothly (no camera rotation is forced on you)
-      const t = m.spectateTarget && m.spectateTarget.visible !== false ? m.spectateTarget : P;
-      const fx = -Math.sin(xr.rigYaw), fz = -Math.cos(xr.rigYaw);
-      const want = new THREE.Vector3(lerp(t.prev.x, t.pos.x) - fx * 5, lerp(t.prev.y, t.pos.y) + 1.2, lerp(t.prev.z, t.pos.z) - fz * 5);
-      if (!this.spectatePos) this.spectatePos = want.clone();
-      this.spectatePos.lerp(want, Math.min(1, dt * 2.5));
-      this.placeRig(this.spectatePos.x, this.spectatePos.y, this.spectatePos.z);
-      if (!this.deathPanel && m.phase !== 'over' && !this.game.paused) { this.deathPanel = true; this.game.showVrDeath(); }
-    }
+      this.specTarget = null; this.specTurn = 0;
+    } else this.spectate(alpha, dt);
     // head pose of this frame (the camera object itself only gets it during rendering)
     this.headWorld.copy(xr.headLocal).applyMatrix4(xr.rig.matrixWorld);
     m.cameraRig.pos.copy(this.headWorld);
@@ -375,6 +379,8 @@ export class XRPlayer {
     this.updateHeld(main, dt);
     this.updateLaser(dt);
     this.hud.update(dt, off, this.actions.mapHeld && !this.game.paused);
+    this.hints.update(dt, this.hintContext(), main, this.settings.get('vrHints'));
+    this.updateGlider(dt);
     // comfort vignette: artificial motion only (room-scale walking never darkens the view)
     const vs = { off: 0, low: 0.6, strong: 1.2 }[this.settings.get('vrVignette')] ?? 0.6;
     let target = 0;
@@ -383,9 +389,75 @@ export class XRPlayer {
       else if (P.mode === 'freefall') target = 0.4;
       else if (P.mode === 'glide') target = 0.25;
       target += Math.min(1, this.turnRate / 2) * 0.5;
+    } else if (!P.alive && !this.game.paused) {
+      // spectator camera: moves and turns on its own -> same comfort vignette
+      const t = this.specTarget;
+      if (t && t !== P) target = Math.min(1, Math.hypot(t.vel.x, t.vel.z) / 8) * 0.35 + Math.min(1, this.specTurn / 2) * 0.5;
     }
     this.vignette.update(dt, Math.min(1, target * vs));
     this.perfGovernor(dt);
+  }
+
+  /** Glider canopy above your head while gliding, lines to your hands. */
+  updateGlider(dt) {
+    const P = this.match.player, xr = this.xr;
+    const gliding = P.alive && P.mode === 'glide';
+    const sp = Math.hypot(P.vel.x, P.vel.z);
+    const heading = sp > 1 ? yawTo(P.vel.x, P.vel.z) : (P.moveYaw ?? xr.rigYaw + xr.headYaw);
+    const hand = (side) => {
+      const s = xr.slots.find((q) => q.connected && !q.isHand && q.handedness === side);
+      return s ? s.grip.getWorldPosition(new THREE.Vector3()) : null;
+    };
+    this.glider.update(dt, gliding, this.headWorld, heading, { x: this.input.axis.x, y: this.input.axis.y }, [hand('left'), hand('right')]);
+  }
+
+  /** Game situation for the controller button hints. */
+  hintContext() {
+    const m = this.match, P = m.player, ctrl = m.controller, s = this.settings;
+    const cur = P.inv.current();
+    let item = 'gun';
+    if (P.inv.sel === 0) item = 'pickaxe';
+    else if (cur && cur.kind === 'consumable') item = CONSUMABLES[cur.type] && CONSUMABLES[cur.type].throwable ? 'grenade' : 'heal';
+    return { mode: P.mode, alive: P.alive, building: !!ctrl.buildMode, editing: !!ctrl.editPiece, phase: m.phase, paused: this.game.paused,
+      teleport: s.get('vrMove') === 'teleport', smoothTurn: s.get('vrTurn') === 'smooth', item };
+  }
+
+  /**
+   * After death: third-person chase view behind the watched player (your killer first), turning with
+   * them like the flat-screen spectator camera. The camera is pulled in when a wall is behind them.
+   */
+  spectate(alpha, dt) {
+    const m = this.match, P = m.player, xr = this.xr;
+    const lerp = (a, b) => a + (b - a) * alpha;
+    const t = m.spectateTarget && m.spectateTarget.visible !== false ? m.spectateTarget : P;
+    const tx = lerp(t.prev.x, t.pos.x), ty = lerp(t.prev.y, t.pos.y), tz = lerp(t.prev.z, t.pos.z);
+    if (t !== this.specTarget) {
+      this.specTarget = t;
+      this.specYaw = t === P ? xr.rigYaw + xr.headYaw : t.yaw;
+      this.spectatePos = null;
+      // your current head direction becomes "behind the target"; looking around stays free afterwards
+      this.specHeadRef = xr.headYaw;
+      xr.rigYaw = this.specYaw - this.specHeadRef;
+    }
+    if (t !== P && !this.game.paused) this.specYaw += wrapAngle(t.yaw - this.specYaw) * Math.min(1, dt * 3);
+    const back = t === P ? 5 : 4.2, up = t === P ? 2.2 : 1.1;
+    const fx = -Math.sin(this.specYaw), fz = -Math.cos(this.specYaw);
+    const hx = tx, hy = ty + (t.height || 1.8), hz = tz;
+    let dx = -fx * back, dy = up, dz = -fz * back;
+    const L = Math.hypot(dx, dy, dz);
+    m.physics.raycast(hx, hy, hz, dx / L, dy / L, dz / L, L + 0.3, null, camHit);
+    const k = camHit.hit ? Math.max(0.35, camHit.t - 0.3) / L : 1;
+    const want = _v.set(hx + dx * k, hy + dy * k, hz + dz * k);
+    if (!this.spectatePos) this.spectatePos = want.clone();
+    else this.spectatePos.lerp(want, Math.min(1, dt * 5));
+    // turn the play space with the target (the view axis follows its heading)
+    if (!this.game.paused) {
+      const before = xr.rigYaw;
+      xr.rigYaw += wrapAngle(this.specYaw - this.specHeadRef - xr.rigYaw) * Math.min(1, dt * 6);
+      this.specTurn = Math.abs(wrapAngle(xr.rigYaw - before)) / Math.max(1e-3, dt);
+    }
+    // eyes exactly at the camera point, whatever your real height
+    this.placeRig(this.spectatePos.x, this.spectatePos.y - this.viewOffset() - (xr.headLocal.y > 0.5 ? xr.headLocal.y : 1.6), this.spectatePos.z);
   }
 
   /**
@@ -422,30 +494,38 @@ export class XRPlayer {
       else if (cur && cur.kind === 'consumable') key = 'c_' + cur.type;
     }
     this.held.visible = !!key;
-    if (!key) return;
-    let mesh = this.heldMeshes[key];
-    if (!mesh) {
-      const geo = key.startsWith('c_') ? consumableGeometry(key.slice(2)) : weaponGeometry(key);
-      if (key.startsWith('c_')) geo.scale(0.6, 0.6, 0.6);
-      geo.computeBoundingBox();
-      mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
-      mesh.userData.muzzleZ = geo.boundingBox.min.z;
-      this.heldMeshes[key] = mesh;
-      this.held.add(mesh);
+    if (!key) { this.heldItem = null; this.aimY = 0.05; this.aimZ = -0.1; this.physAds = false; return; }
+    let item = this.heldItems[key];
+    if (!item) { item = makeHeldItem(key); this.heldItems[key] = item; this.held.add(item.root); }
+    if (this.heldItem !== item) {
+      for (const k in this.heldItems) this.heldItems[k].root.visible = k === key;
+      this.heldItem = item;
+      this.aimY = item.aimY; this.aimZ = item.aimZ;
     }
-    if (this.heldKey !== key) {
-      for (const k in this.heldMeshes) this.heldMeshes[k].visible = k === key;
-      this.heldKey = key;
-      mesh.position.set(0, 0, 0); mesh.rotation.set(0, 0, 0);
-      if (key === 'pickaxe') { mesh.rotation.x = -0.75; mesh.position.set(0, -0.06, 0.06); }
-      else if (key.startsWith('c_')) mesh.position.set(0, -0.02, -0.03);
-      else mesh.position.set(0, 0.06, 0.03); // handle in the palm
-      this.muzzleZ = key.startsWith('c_') || key === 'pickaxe' ? -0.1 : mesh.userData.muzzleZ + 0.03;
-    }
-    mesh.material.color.set(color);
+    item.mesh.material.color.set(color);
     this.held.position.copy(main.grip.position);
     this.held.quaternion.copy(main.ray.quaternion);
     if (this.recoil > 0) { this.held.translateZ(this.recoil * 0.05); this.held.rotateX(this.recoil * 0.2); }
+    // aiming down the sights: rear sight close to your eye and the barrel pointing where you look
+    this.physAds = false;
+    if (item.sight) {
+      this.held.updateMatrixWorld(true);
+      const rear = _v.set(0, item.sight.y, item.sight.rear).applyMatrix4(this.held.matrixWorld);
+      const d = rear.distanceTo(this.headWorld);
+      const view = this.headDir(_v2);
+      this.physAds = d < 0.2 && view.dot(this.aimDir) > 0.94;
+    }
+  }
+
+  /** Before the main render: the sniper scope draws its zoomed view (only while it is in use). */
+  preRender() {
+    const item = this.heldItem, P = this.match.player;
+    if (!item || !item.scope || !this.held.visible || this.game.paused) return;
+    if (!(this.physAds || this.actions.aim)) return;
+    this.held.updateMatrixWorld(true);
+    const front = _v.set(0, item.sight.y, item.sight.front - 0.02).applyMatrix4(this.held.matrixWorld);
+    item.scope.render(this.game.renderer, this.match.scene, front, this.aimDir,
+      [this.xr.rig, this.laser, this.dot, this.arc.line, this.arc.marker, this.glider.root, this.glider.lines]);
   }
 
   updateLaser(dt) {

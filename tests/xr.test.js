@@ -108,3 +108,19 @@ test('handVelocity from position history', () => {
   assert.ok(Math.abs(v.z + 4) < 1e-9 && Math.abs(v.speed - 4) < 1e-9);
   assert.equal(handVelocity([]).speed, 0);
 });
+
+test('controller hints follow the game situation and the physical button letters', async () => {
+  const { hintRows, relabel } = await import('../src/xr/XRHints.js');
+  const base = { mode: 'ground', alive: true, building: false, editing: false, phase: 'play', paused: false, teleport: false, smoothTurn: false, item: 'gun' };
+  const main = hintRows(true, base);
+  assert.deepEqual(main[0], ['TRIGGER', 'Fire']);
+  assert.ok(main.some(([b, w]) => b === 'A' && w === 'Jump'));
+  assert.ok(hintRows(true, { ...base, building: true }).some(([, w]) => w === 'Place piece'));
+  assert.ok(hintRows(true, { ...base, mode: 'bus' }).some(([b, w]) => b === 'A' && /bus/.test(w)));
+  assert.ok(hintRows(true, { ...base, alive: false }).some(([, w]) => w === 'Next player'));
+  assert.ok(hintRows(false, { ...base, teleport: true }).some(([, w]) => /teleport/i.test(w)));
+  // left-handed: the gun hand is the left controller, whose face buttons are X / Y
+  const lefty = relabel(main, true, ['X', 'Y']);
+  assert.ok(lefty.some(([b, w]) => b === 'X' && w === 'Jump') && lefty.some(([b, w]) => b === 'Y' && w === 'Reload'));
+  assert.deepEqual(relabel(main, true, ['A', 'B']), main);
+});

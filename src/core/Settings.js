@@ -46,6 +46,7 @@ const DEFAULTS = {
   vrVignette: 'low',         // comfort vignette during artificial motion: 'off' | 'low' | 'strong'
   vrHand: 'right',           // dominant hand (gun / trigger hand)
   vrSeated: false,           // seated play: no physical crouch detection
+  vrHints: 'auto',           // controller button hints: 'auto' (look at a controller) | 'always' | 'off'
   vrBots: 49,                // bot count for VR matches (the headset has a phone-class CPU)
   vrQuality: 'balanced',     // 'balanced' (90 Hz, shadows) | 'performance' (72 Hz, no shadows / grass)
   ...MAP_DEFAULTS,

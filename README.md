@@ -165,6 +165,25 @@ space, physical crouching, Touch controller buttons, haptics, a wrist HUD and co
 | Left grip (hold) | Enlarge the wrist HUD (minimap) |
 | Duck in real life | Crouch (off in *seated* mode) |
 
+**Don't know the controller?** Raise a controller in front of your eyes: a card next to it lists what
+each button does *right now* (it changes in build mode, while skydiving, spectating...) and yellow
+badges mark the A/B/X/Y buttons. The cards are also shown for the first 20 s of a match, and *pause
+(Y) → CONTROLS* lists the whole layout. *Settings → VR controller hints*: when you look at a controller
+(default) / always / off.
+
+**Aiming down the sights**: every gun has real sights — a rear notch and a front post with a glowing
+dot — and shots travel exactly along that sight line. Bring the gun up to your eye (rear sight within
+~20 cm, barrel pointing where you look) and you aim down sights automatically (tighter spread, like
+holding the left trigger). The sniper has a working **scope**: its lens shows a magnified (~6.5°)
+picture of the world with a reticle.
+
+**Glider**: when you open it (A while skydiving) a striped canopy unfolds above your head with lines
+down to your hands; it banks into turns, sways, and folds away when you land.
+
+**After you are eliminated** the camera follows your killer in third person (behind them, turning
+with them; you can still look around freely). Trigger / A switches to the next player, Y opens the
+menu (leave match).
+
 **HUD**: look at your left wrist — health / shield, ammo, materials, hotbar, minimap, storm timer and
 kill feed. Announcements, pickup prompts (*GRIP: Pick up…*) and toasts appear low in your view, red
 arcs show where damage comes from, and a laser + dot from the muzzle turns red on enemies.
@@ -196,7 +215,7 @@ R = B, B = X, P = Y, F = grip, C = stick click, Shift = sprint, M = map, H = swi
 | Bots | 10–99 (+ you = up to 100 players, next match) |
 | Bot difficulty | Easy / Medium / Hard / Expert / Mixed (default) |
 | Map seed | blank = random; same seed + same map options = same island |
-| VR | Movement (stick / teleport), move direction (head / off-hand controller), snap or smooth turning, snap angle, smooth turn speed, comfort vignette, dominant hand, seated play, bots in VR matches (default 49), performance mode |
+| VR | Movement (stick / teleport), move direction (head / off-hand controller), snap or smooth turning, snap angle, smooth turn speed, comfort vignette, dominant hand, controller hints, seated play, bots in VR matches (default 49), performance mode |
 | Map generation | Island size (small/normal/large), terrain (flat/hills/mountains — adds a 2nd peak), season / biome (summer/autumn/winter/desert — terrain, trees, grass, sky, fog, snowy roofs), water (lake / no lake / archipelago with swimmable sea channels), buildings (few/normal/many) and vegetation (sparse/normal/dense); each can be Random, or Randomize all |
 
 Settings and bindings are stored in `localStorage`.
@@ -256,8 +275,10 @@ src/audio/               AudioEngine (procedural SFX, loops, generated lobby mus
 src/vfx/                 Effects (debris, glow particles, smoke, tracers, decals, storm wall)
 src/xr/                  WebXR VR: XRManager (session, play-space rig, controllers, haptics, ?vrsim=1),
                          XRPlayer (first-person rig, room-scale walking, input mapping, held weapon,
-                         grab / swing / throw), XRHud (wrist panel + head-locked messages), XRPanel
-                         (laser-clicked menus), XRComfort (vignette, teleport arc), xrLogic (pure helpers)
+                         grab / swing / throw, spectator camera), XRWeapons (held guns, iron sights,
+                         scope), XRGlider (canopy animation), XRHints (controller button cards),
+                         XRHud (wrist panel + head-locked messages), XRPanel (laser-clicked menus),
+                         XRComfort (vignette, teleport arc), xrLogic (pure helpers)
 src/debug/               DebugOverlay (F3), DebugTools (?debug=1) + nav-grid visualization
 tests/                   node:test logic tests
 tools/use-nvidia-gpu.ps1 assigns browsers to the high-performance GPU (Windows)
@@ -339,4 +360,4 @@ healing caps, loot tables, inventory stacking/swapping, all storm phases (circle
 storm interpolation, A* (straight, around walls, partial paths), ramp surfaces, build-grid keys/bounds/
 helpers, GPU renderer-string detection, and the VR helpers (controller button mapping with edges and
 hysteresis, snap / smooth turn direction, turning around the head, physical crouch, teleport targets,
-hand velocity).
+hand velocity, context-dependent controller hints incl. left-handed button letters).

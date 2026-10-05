@@ -69,8 +69,10 @@ export class XRPanel {
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillStyle = '#ffd23f'; g.font = 'bold 64px sans-serif';
     g.fillText(s.title || '', W / 2, 84);
-    g.fillStyle = '#e8eefc'; g.font = '34px sans-serif';
-    (s.lines || []).forEach((l, i) => g.fillText(String(l).slice(0, 60), W / 2, 160 + i * 46));
+    g.fillStyle = '#e8eefc';
+    const small = !!s.small;
+    g.font = small ? '27px sans-serif' : '34px sans-serif';
+    (s.lines || []).forEach((l, i) => g.fillText(String(l).slice(0, small ? 72 : 60), W / 2, small ? 136 + i * 36 : 160 + i * 46, W - 60));
     const btns = s.buttons || [];
     this.buttons = [];
     const cols = btns.length > 3 ? 2 : 1;

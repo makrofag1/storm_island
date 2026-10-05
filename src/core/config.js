@@ -39,12 +39,12 @@ export const RARITIES = [
 // softShadows = PCF soft filtering; wind = swaying grass; terrainRes = terrain mesh spacing (m);
 // cinematic = ACES filmic tone mapping (punchier colours and highlights).
 export const QUALITY = {
-  low:    { pixelRatio: 0.75, renderScale: 1,    shadows: false, shadowSize: 0,    shadowRange: 0,   softShadows: false, terrainRes: 8, grass: 0,     grassRange: 0,   wind: false, drawDist: 380,  particles: 500,  charDist: 260 },
+  low:    { pixelRatio: 0.75, renderScale: 1,    shadows: false, shadowSize: 0,    shadowRange: 0,   softShadows: false, terrainRes: 8, grass: 0,     grassRange: 0,   wind: false, drawDist: 380,  particles: 500,  charDist: 360 },
   medium: { pixelRatio: 1.0,  renderScale: 1,    shadows: true,  shadowSize: 1024, shadowRange: 55,  softShadows: false, terrainRes: 4, grass: 5000,  grassRange: 110, wind: false, drawDist: 620,  particles: 1200, charDist: 420 },
   // VR (Quest 3 browser): two eyes at 72-90 Hz on a mobile GPU -> short draw distance, small shadow
   // map, sparse grass; 'vrPerf' drops shadows and grass completely
-  vr:     { pixelRatio: 1.0,  renderScale: 1,    shadows: true,  shadowSize: 1024, shadowRange: 35,  softShadows: false, terrainRes: 4, grass: 3000,  grassRange: 60,  wind: false, drawDist: 320,  particles: 600,  charDist: 220 },
-  vrPerf: { pixelRatio: 1.0,  renderScale: 1,    shadows: false, shadowSize: 0,    shadowRange: 0,   softShadows: false, terrainRes: 8, grass: 0,     grassRange: 0,   wind: false, drawDist: 260,  particles: 400,  charDist: 180 },
+  vr:     { pixelRatio: 1.0,  renderScale: 1,    shadows: true,  shadowSize: 1024, shadowRange: 35,  softShadows: false, terrainRes: 4, grass: 3000,  grassRange: 60,  wind: false, drawDist: 360,  particles: 600,  charDist: 380 },
+  vrPerf: { pixelRatio: 1.0,  renderScale: 1,    shadows: false, shadowSize: 0,    shadowRange: 0,   softShadows: false, terrainRes: 8, grass: 0,     grassRange: 0,   wind: false, drawDist: 300,  particles: 400,  charDist: 340 },
   high:   { pixelRatio: 1.5,  renderScale: 1.25, shadows: true,  shadowSize: 4096, shadowRange: 120, softShadows: true,  terrainRes: 2, grass: 24000, grassRange: 150, wind: true,  drawDist: 1150, particles: 2600, charDist: 800, cinematic: true },
 };
 

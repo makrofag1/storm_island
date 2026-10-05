@@ -134,6 +134,8 @@ export class XRManager {
     this.rig.add(cam);
     cam.position.set(0, 1.6, 0);
     cam.rotation.set(0, 0, 0);
+    // close-up things in VR (rear sight at your eye, gloves, wrist) must not be clipped
+    cam.near = 0.05; cam.updateProjectionMatrix();
   }
   detachCamera() {
     const cam = this.game.camera;
@@ -144,6 +146,7 @@ export class XRManager {
     cam.scale.set(1, 1, 1);
     cam.fov = this.game.settings.get('fov');
     cam.zoom = 1;
+    cam.near = 0.15;
     this.game.resize();
   }
 

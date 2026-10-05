@@ -255,6 +255,7 @@ export class Menus {
       row('VR smooth turn speed', range('vrTurnSpeed', 45, 240, 5, (v) => v + '°/s')),
       row('VR comfort vignette', select('vrVignette', [['off', 'Off'], ['low', 'Low'], ['strong', 'Strong']])),
       row('VR dominant hand', select('vrHand', [['right', 'Right (gun in right hand)'], ['left', 'Left']])),
+      row('VR controller hints', select('vrHints', [['auto', 'When you look at a controller'], ['always', 'Always'], ['off', 'Off']])),
       row('VR seated play', `<input type="checkbox" data-key="vrSeated" ${s.get('vrSeated') ? 'checked' : ''}>`),
       row('VR bots (+ you)', range('vrBots', 10, 99, 1, botFmt)),
       row('VR performance', select('vrQuality', [['balanced', 'Balanced (90 Hz, shadows)'], ['performance', 'Performance (72 Hz, no shadows)']])),

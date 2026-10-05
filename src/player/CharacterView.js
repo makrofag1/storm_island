@@ -21,6 +21,14 @@ export class CharacterView {
     this.group = new THREE.Group();
     scene.add(this.group);
     this.mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    // characters take only part of the fog: a player far away must stay visible as a silhouette
+    // (otherwise someone shooting from the edge of the fog looks invisible)
+    this.mat.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>', `#ifdef USE_FOG
+        float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
+        gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor * 0.55 );
+      #endif`);
+    };
     const geos = characterGeometries();
     this.geos = geos;
     this.meshes = {};
@@ -51,20 +59,33 @@ export class CharacterView {
     this.counts[key] = n + 1;
   }
 
-  render(chars, alpha, camera, maxDist, hideChar, dt) {
+  /**
+   * view (VR): { pos, dir } of the head in world space. In VR the camera is a child of the play-space
+   * rig — its position is local and its matrices are only refreshed while rendering — so culling uses
+   * the head pose instead (distance + a wide view cone that covers both eyes and fast head turns).
+   */
+  render(chars, alpha, camera, maxDist, hideChar, dt, view = null) {
     this.time += dt;
     for (const k in this.meshes) this.counts[k] = 0;
-    _pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-    _frustum.setFromProjectionMatrix(_pm);
-    const cp = camera.position;
+    if (!view) {
+      _pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      _frustum.setFromProjectionMatrix(_pm);
+    }
+    const cp = view ? view.pos : camera.position;
     for (const ch of chars) {
       if (!ch.visible || ch === hideChar) continue;
       const x = lerp(ch.prev.x, ch.pos.x, alpha), y = lerp(ch.prev.y, ch.pos.y, alpha), z = lerp(ch.prev.z, ch.pos.z, alpha);
       const dx = x - cp.x, dz = z - cp.z;
-      if (dx * dx + dz * dz > maxDist * maxDist) continue;
-      _sphere.center.set(x, y + 1, z);
-      _sphere.radius = ch.mode === 'glide' ? 3.5 : 1.6;
-      if (!_frustum.intersectsSphere(_sphere)) continue;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > maxDist * maxDist) continue;
+      if (view) {
+        const dy = y + 1 - cp.y, d = Math.sqrt(d2 + dy * dy);
+        if (d > 6 && (dx * view.dir.x + dy * view.dir.y + dz * view.dir.z) / d < 0.17) continue; // > ~80° off the view axis
+      } else {
+        _sphere.center.set(x, y + 1, z);
+        _sphere.radius = ch.mode === 'glide' ? 3.5 : 1.6;
+        if (!_frustum.intersectsSphere(_sphere)) continue;
+      }
       this.pose(ch, x, y, z, lerpAngle(ch.prevYaw, ch.yaw, alpha), dt);
     }
     for (const k in this.meshes) {

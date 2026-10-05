@@ -226,6 +226,25 @@ export class Game {
     } else P.hide();
   }
 
+  /** Full Touch controller layout (pause menu → CONTROLS). */
+  showVrControls() {
+    const left = this.settings.get('vrHand') === 'left';
+    const gun = left ? 'LEFT' : 'RIGHT', other = left ? 'RIGHT' : 'LEFT';
+    const [a, b] = left ? ['X', 'Y'] : ['A', 'B'], [x, y] = left ? ['A', 'B'] : ['X', 'Y'];
+    this.xrPanel.show({ title: 'CONTROLS', small: true, lines: [
+      `${gun} (gun hand): TRIGGER fire · GRIP grab loot / open chest`,
+      `${a} jump / glider · ${b} reload · STICK ←→ turn · STICK ↑↓ weapon`,
+      'STICK CLICK crouch · swing the pickaxe with your arm',
+      'Grenades: hold TRIGGER, throw with your arm, release',
+      `${other}: STICK move (click = sprint) · TRIGGER aim`,
+      `${x} build mode · ${y} this menu · GRIP (hold) big map`,
+      `Build mode: TRIGGER place · STICK ↑↓ piece · ${b} rotate`,
+      `   ${other} TRIGGER material · STICK CLICK edit · ${x} exit`,
+      'Look at your wrist: health, ammo, materials, map',
+      'Duck in real life to crouch · raise a controller to see hints',
+    ], buttons: [{ id: 'back', label: 'BACK', primary: true }] }, () => this.showVrPause(false), false);
+  }
+
   showVrPause(reposition = true) {
     const st = this.settings;
     const turn = st.get('vrTurn') === 'smooth' ? 'Smooth turn' : `Snap turn ${st.get('vrSnapAngle')}°`;
@@ -235,10 +254,11 @@ export class Game {
     this.xrPanel.show({ title: 'PAUSED', lines, buttons: [
       { id: 'resume', label: 'RESUME', primary: true }, { id: 'turn', label: 'TURN: ' + (st.get('vrTurn') === 'smooth' ? 'SMOOTH' : 'SNAP') },
       { id: 'move', label: 'MOVE: ' + (st.get('vrMove') === 'teleport' ? 'TELEPORT' : 'STICK') }, { id: 'vig', label: 'VIGNETTE: ' + String(st.get('vrVignette')).toUpperCase() },
-      { id: 'calib', label: 'RESET HEIGHT' }, { id: 'exit', label: 'EXIT VR' },
-      { id: 'leave', label: 'LEAVE MATCH', danger: true },
+      { id: 'calib', label: 'RESET HEIGHT' }, { id: 'controls', label: 'CONTROLS' },
+      { id: 'exit', label: 'EXIT VR' }, { id: 'leave', label: 'LEAVE MATCH', danger: true },
     ] }, (id) => {
       if (id === 'resume') { this.setPaused(false); return; }
+      if (id === 'controls') { this.showVrControls(); return; }
       if (id === 'turn') st.set('vrTurn', st.get('vrTurn') === 'smooth' ? 'snap' : 'smooth');
       if (id === 'move') st.set('vrMove', st.get('vrMove') === 'teleport' ? 'stick' : 'teleport');
       if (id === 'vig') { const o = ['off', 'low', 'strong']; st.set('vrVignette', o[(o.indexOf(st.get('vrVignette')) + 1) % 3]); }
@@ -249,14 +269,6 @@ export class Game {
     }, reposition);
   }
 
-  showVrDeath() {
-    const m = this.match;
-    if (!m) return;
-    const P = m.player;
-    this.xrPanel.show({ title: 'ELIMINATED', lines: [`You placed #${P.placement || m.aliveCount + 1}`, P.killer ? `by ${P.killer.name}` : '', 'Trigger / A: next player'],
-      buttons: [{ id: 'next', label: 'SPECTATE NEXT', primary: true }, { id: 'leave', label: 'LEAVE MATCH', danger: true }] },
-    (id) => { if (id === 'next') m.nextSpectateTarget(); else { this.xrPanel.hide(); this.leaveMatch(true); } });
-  }
 
   /** Menu -> Lobby: build the world while the lobby screen shows, then launch the bus. */
   startMatch(opts = {}) {

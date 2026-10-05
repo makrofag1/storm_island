@@ -150,6 +150,11 @@ export class XRHud {
     else if (p.mode === 'freefall') info = `ALT ${Math.max(0, p.pos.y - Math.max(0, m.world.hm.height(p.pos.x, p.pos.z))).toFixed(0)} m · A = glider · look down + stick forward to dive`;
     else if (p.mode === 'glide') info = `ALT ${Math.max(0, p.pos.y - Math.max(0, m.world.hm.height(p.pos.x, p.pos.z))).toFixed(0)} m · stick forward / back = speed`;
     if (info) lines.push({ text: info, font: 'bold 32px sans-serif', color: '#bfe6ff' });
+    if (!p.alive && m.phase !== 'over') {
+      const t = m.spectateTarget;
+      lines.push({ text: t ? `SPECTATING ${t.name}${t.persona ? ' · ' + t.persona.name : ''} · ${t.stats.kills} elims` : 'ELIMINATED', font: 'bold 34px sans-serif', color: '#ffd23f' });
+      lines.push({ text: 'Trigger / A: next player · Y: menu (leave match)', font: '28px sans-serif', color: '#e8eefc' });
+    }
     if (p.alive && ctrl.prompt) lines.push({ text: 'GRIP: ' + ctrl.prompt.text, font: 'bold 34px sans-serif', color: ctrl.prompt.color });
     for (const t of this.toasts) lines.push({ text: t.text, font: 'bold 30px sans-serif', color: t.color });
     const shown = lines.slice(0, 5);
