@@ -506,14 +506,17 @@ export class XRPlayer {
     this.held.position.copy(main.grip.position);
     this.held.quaternion.copy(main.ray.quaternion);
     if (this.recoil > 0) { this.held.translateZ(this.recoil * 0.05); this.held.rotateX(this.recoil * 0.2); }
-    // aiming down the sights: rear sight close to your eye and the barrel pointing where you look
+    // aiming down the sights: your eye is on the sight line, behind the rear sight (cheek on the stock),
+    // and you look along the barrel. (Tested on a Quest 3: a plain "rear sight within 20 cm" check never
+    // fired for the rifle, whose rear sight sits 10 cm in front of the grip.)
     this.physAds = false;
     if (item.sight) {
       this.held.updateMatrixWorld(true);
-      const rear = _v.set(0, item.sight.y, item.sight.rear).applyMatrix4(this.held.matrixWorld);
-      const d = rear.distanceTo(this.headWorld);
+      const eye = this.held.worldToLocal(_v.copy(this.headWorld));
+      const offLine = Math.hypot(eye.x, eye.y - item.sight.y);
+      const behind = eye.z - item.sight.rear;
       const view = this.headDir(_v2);
-      this.physAds = d < 0.2 && view.dot(this.aimDir) > 0.94;
+      this.physAds = offLine < 0.07 && behind > -0.02 && behind < 0.5 && view.dot(this.aimDir) > 0.94;
     }
   }
 

@@ -67,6 +67,8 @@ export class Game {
     this.xrPanel = new XRPanel(this.xr);
     this.xr.on('start', () => this.onVrStart());
     this.xr.on('end', () => this.onVrEnd());
+    // headset test mode (fixed scenarios + console reports), see src/debug/VrTests.js
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('vrtest')) import('../debug/VrTests.js').then((mod) => { this.vrTests = new mod.VrTests(this); });
     this.applyQuality();
 
     this.audio = new AudioEngine(this.settings);
