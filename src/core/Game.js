@@ -5,7 +5,7 @@ import { Settings } from './Settings.js';
 import { Input } from './Input.js';
 import { EventBus } from './EventBus.js';
 import { resolveSeed } from './rng.js';
-import { QUALITY, DT, DEBUG } from './config.js';
+import { QUALITY, DT, DEBUG, NO_FOG, GRADE } from './config.js';
 import { Match } from '../match/Match.js';
 import { Menus } from '../ui/Menus.js';
 import { AudioEngine } from '../audio/Audio.js';
@@ -16,6 +16,25 @@ import { MAP_OPTIONS } from '../world/MapOptions.js';
 import { XRManager } from '../xr/XRManager.js';
 import { XRPanel } from '../xr/XRPanel.js';
 import { formatTime } from './math.js';
+
+// Colour grade for the whole 3D view, via three's custom tone-mapping hook (works on a flat screen and
+// in the headset alike; UI materials with toneMapped:false are left alone): exposure, saturation,
+// vibrance (dull colours get more) and contrast around mid-grey in a perceptual (square-root) space,
+// with a soft roll-off of the highlights.
+THREE.ShaderChunk.tonemapping_pars_fragment = THREE.ShaderChunk.tonemapping_pars_fragment.replace(
+  'vec3 CustomToneMapping( vec3 color ) { return color; }',
+  `vec3 CustomToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    float l = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
+    float hi = max( color.r, max( color.g, color.b ) ), lo = min( color.r, min( color.g, color.b ) );
+    float chroma = ( hi - lo ) / max( hi, 1e-4 );
+    color = max( mix( vec3( l ), color, ${GRADE.saturation.toFixed(3)} + ${GRADE.vibrance.toFixed(3)} * ( 1.0 - chroma ) ), 0.0 );
+    vec3 g = ( sqrt( color ) - 0.42 ) * ${GRADE.contrast.toFixed(3)} + 0.42;
+    g = max( g, 0.0 );
+    // soft shoulder: bright surfaces (snow, sky) keep their shading instead of clipping to flat white
+    g = mix( g, 0.82 + 0.18 * ( 1.0 - exp( -( g - 0.82 ) / 0.18 ) ), step( 0.82, g ) );
+    return g * g;
+  }`);
 
 export class Game {
   constructor(canvas, uiRoot) {
@@ -53,7 +72,7 @@ export class Game {
     // near plane 0.15 (not 0.1): 1.5x depth precision so nearly coplanar faces don't flicker far away
     this.camera = new THREE.PerspectiveCamera(this.settings.get('fov'), 1, 0.15, 3000);
     this.camera.rotation.order = 'YXZ';
-    this.fog = new THREE.Fog(0xa9cdee, 150, this.quality.drawDist);
+    this.fog = new THREE.Fog(0xa9cdee, NO_FOG.near, NO_FOG.far);
     this.scene.fog = this.fog;
     this.baseFogColor = new THREE.Color(0xa9cdee);
     this.hemi = new THREE.HemisphereLight(0xcfe6ff, 0x8a8470, 1.5); // neutral bounce light: ceilings no longer turn dark olive
@@ -135,8 +154,8 @@ export class Game {
     if (!this.renderer.xr.isPresenting) this.renderer.setPixelRatio(pr); // the headset sets its own resolution
     this.renderer.shadowMap.enabled = q.shadows;
     this.renderer.shadowMap.type = q.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-    this.renderer.toneMapping = q.cinematic ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-    this.renderer.toneMappingExposure = q.cinematic ? 1.25 : 1;
+    this.renderer.toneMapping = THREE.CustomToneMapping; // colour grade, see the top of this file
+    this.renderer.toneMappingExposure = q.cinematic ? 1.12 : 1.04;
     this.sun.castShadow = q.shadows;
     if (q.shadows) {
       this.sun.shadow.mapSize.set(q.shadowSize, q.shadowSize);
@@ -148,8 +167,7 @@ export class Game {
       this.sun.shadow.normalBias = 0.04;
       if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
     }
-    this.fog.far = q.drawDist;
-    this.fog.near = Math.min(150, q.drawDist * 0.3);
+    this.fog.near = NO_FOG.near; this.fog.far = NO_FOG.far; // no distance fog (the storm adds its own haze)
     this.camera.far = Math.max(2600, q.drawDist + 200);
     this.camera.updateProjectionMatrix();
   }

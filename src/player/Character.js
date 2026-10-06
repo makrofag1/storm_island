@@ -56,6 +56,7 @@ export class Character {
     this.intent = makeIntent();
     // combat
     this.fireCd = 0; this.bloom = 0;
+    this.fireQueued = false; this.fireBuf = 0; // a trigger press waiting for the gun to be ready
     this.reloadT = 0; this.reloadTotal = 0;
     this.useT = 0; this.useTotal = 0; this.useSlot = -1;
     this.swingCd = 0; this.swingAnim = 0;

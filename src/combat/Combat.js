@@ -27,12 +27,14 @@ export class Combat {
     if (!ch.alive) return;
     if (ch.fireCd > 0) ch.fireCd -= dt;
     if (ch.swingCd > 0) ch.swingCd -= dt;
+    if (ch.fireBuf > 0) ch.fireBuf -= dt;
     const inv = ch.inv;
     if (inv.sel !== ch.lastSel) {
       ch.reloadT = 0; ch.useT = 0;
       ch.fireCd = Math.max(ch.fireCd, 0.22);
       ch.lastSel = inv.sel;
       ch.bloom = 0;
+      ch.fireQueued = false; ch.fireBuf = 0;
     }
     if (ch.mode !== 'ground') return;
     const it = ch.intent;
@@ -52,6 +54,10 @@ export class Combat {
     if (!cur) return;
     if (cur.kind === 'weapon') {
       const def = WEAPONS[cur.type];
+      // a trigger press while the gun isn't ready (shot cooldown / reload) isn't lost: it fires as soon
+      // as the gun is ready, if the trigger is still held or the press was at most 0.35 s earlier
+      if (it.firePressed && (ch.fireCd > 0 || ch.reloadT > 0)) { ch.fireQueued = true; ch.fireBuf = 0.35; }
+      if (!it.fire) ch.fireQueued = false;
       if (ch.reloadT > 0) {
         ch.reloadT -= dt;
         if (ch.reloadT <= 0) {
@@ -64,14 +70,17 @@ export class Combat {
         return;
       }
       if (it.reload && cur.mag < def.mag && inv.ammo[def.ammo] > 0) { this.startReload(ch, cur, def); return; }
-      const wants = it.fire && (def.auto || it.firePressed);
+      const queued = ch.fireQueued || ch.fireBuf > 0;
+      const wants = (it.fire || ch.fireBuf > 0) && (def.auto || it.firePressed || queued);
       if (wants && ch.fireCd <= 0) {
+        ch.fireQueued = false; ch.fireBuf = 0;
         if (cur.mag > 0) this.fire(ch, cur, def, it.aim);
         else if (inv.ammo[def.ammo] > 0) this.startReload(ch, cur, def);
         else if (it.firePressed) { this.ctx.events.emit('dryFire', { ch }); ch.fireCd = 0.3; }
       }
-      // auto reload when empty and not firing
-      if (cur.mag === 0 && !it.fire && inv.ammo[def.ammo] > 0 && ch.fireCd <= 0) this.startReload(ch, cur, def);
+      // auto reload when empty and not firing; single-shot guns (sniper, rocket launcher) reload right
+      // after the shot, during the shot cooldown (like working the bolt)
+      if (cur.mag === 0 && inv.ammo[def.ammo] > 0 && (def.mag === 1 || (!it.fire && ch.fireCd <= 0))) this.startReload(ch, cur, def);
     } else if (cur.kind === 'consumable') {
       const def = CONSUMABLES[cur.type];
       if (def.throwable) {
@@ -163,7 +172,14 @@ export class Combat {
     for (let p = 0; p < def.pellets; p++) {
       const d = applySpread(dir, def.pellets > 1 ? spread * (0.35 + 0.65 * Math.random()) : spread, this.rng);
       if (def.projectile) {
-        this.spawnProjectile(ch, cur.type, cur.rarity, mx, my, mz, d.x * def.projectile.speed, d.y * def.projectile.speed, d.z * def.projectile.speed);
+        const sp = def.projectile.speed;
+        if (def.projectile.fromEye) {
+          // sniper: the bullet flies along the aim line itself (crosshair / scope centre), so it hits
+          // exactly where you aim apart from gravity drop; its visible trail starts at the muzzle and
+          // merges into that line over the first metres
+          const pr = this.spawnProjectile(ch, cur.type, cur.rarity, ex, ey, ez, d.x * sp, d.y * sp, d.z * sp);
+          pr.ox = mx - ex; pr.oy = my - ey; pr.oz = mz - ez;
+        } else this.spawnProjectile(ch, cur.type, cur.rarity, mx, my, mz, d.x * sp, d.y * sp, d.z * sp);
         continue;
       }
       this.physics.raycast(ex, ey, ez, d.x, d.y, d.z, def.range, { chars: true, ignore: ch }, hit);
@@ -267,6 +283,7 @@ export class Combat {
     p.owner = owner; p.type = type; p.rarity = rarity;
     p.x = x; p.y = y; p.z = z; p.vx = vx; p.vy = vy; p.vz = vz;
     p.px = x; p.py = y; p.pz = z;
+    p.ox = p.oy = p.oz = 0; // visual offset of the trail (muzzle vs. aim line), fades out with distance
     p.life = type === 'grenade' ? 2.6 : 4; p.dist = 0; p.active = true;
     this.projectiles.push(p);
     this.ctx.events.emit('projectileSpawn', { p });
@@ -311,14 +328,17 @@ export class Combat {
           this.explode(hit2.x - sx / len * 0.3, hit2.y - sy / len * 0.3, hit2.z - sz / len * 0.3, e.radius, def.damage * (1 + p.rarity * 0.05), e.structDmg, p.owner, p.type);
         } else {
           this.resolveBulletHit(p.owner, def, { rarity: p.rarity, type: p.type }, hit2, p.dist + hit2.t);
-          this.ctx.events.emit('tracer', { x0: p.px, y0: p.py, z0: p.pz, x1: hit2.x, y1: hit2.y, z1: hit2.z, weapon: p.type });
+          const k0 = trailOffset(p.dist), k1 = trailOffset(p.dist + hit2.t);
+          this.ctx.events.emit('tracer', { x0: p.px + p.ox * k0, y0: p.py + p.oy * k0, z0: p.pz + p.oz * k0, x1: hit2.x + p.ox * k1, y1: hit2.y + p.oy * k1, z1: hit2.z + p.oz * k1, weapon: p.type });
         }
         this.kill(i);
         continue;
       }
+      const k0 = trailOffset(p.dist);
       p.x += sx; p.y += sy; p.z += sz; p.dist += len;
-      if (p.type === 'sniper') this.ctx.events.emit('tracer', { x0: p.px, y0: p.py, z0: p.pz, x1: p.x, y1: p.y, z1: p.z, weapon: 'sniper' });
-      if (p.life <= 0 || p.y < -30) this.kill(i);
+      const k1 = trailOffset(p.dist);
+      if (p.type === 'sniper') this.ctx.events.emit('tracer', { x0: p.px + p.ox * k0, y0: p.py + p.oy * k0, z0: p.pz + p.oz * k0, x1: p.x + p.ox * k1, y1: p.y + p.oy * k1, z1: p.z + p.oz * k1, weapon: 'sniper' });
+      if (p.life <= 0 || p.y < -30 || p.dist > def.range) this.kill(i);
     }
   }
 
@@ -371,6 +391,9 @@ export class Combat {
 
   clear() { this.projectiles.length = 0; this.pool.length = 0; }
 }
+
+/** How much of the muzzle offset a projectile trail still shows after flying `dist` metres. */
+const trailOffset = (dist) => Math.max(0, 1 - dist / 25);
 
 const _u = { x: 0, y: 0, z: 0 }, _v = { x: 0, y: 0, z: 0 }, _o = { x: 0, y: 0, z: 0 };
 export function applySpread(dir, angle, rng) {

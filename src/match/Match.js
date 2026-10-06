@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { EventBus } from '../core/EventBus.js';
 import { RNG } from '../core/rng.js';
-import { DEBUG, HALF } from '../core/config.js';
+import { DEBUG, HALF, NO_FOG } from '../core/config.js';
 import { World } from '../world/World.js';
 import { Character, randomSkin } from '../player/Character.js';
 import { stepMotor } from '../player/Motor.js';
@@ -456,11 +456,10 @@ export class Match {
     const target = inStorm ? 1 : 0;
     this.stormTint = (this.stormTint || 0) + (target - (this.stormTint || 0)) * Math.min(1, dt * 2);
     game.fog.color.copy(game.baseFogColor).lerp(new THREE.Color(0x6a3aa8), this.stormTint * 0.85);
-    // high up (bus / skydiving) the island is far below: push the fog out so you can pick a landing spot
-    const altitude = Math.max(0, cp.y - Math.max(0, this.world.hm.height(cp.x, cp.z)) - 25);
-    const far = Math.max(game.quality.drawDist, Math.min(1400, game.quality.drawDist + altitude * 2.4));
-    game.fog.near = Math.min(150, far * 0.3) * (1 - this.stormTint * 0.85);
-    game.fog.far = far * (1 - this.stormTint * 0.6);
+    // no distance fog: a clear view to the horizon. Only inside the storm a purple haze closes in.
+    const clear = (1 - this.stormTint) ** 3;
+    game.fog.near = 20 + NO_FOG.near * clear;
+    game.fog.far = 240 + NO_FOG.far * clear;
     this.world.sky.uniforms.uTint.value.set(0x5a2a90);
     this.world.sky.uniforms.uTintAmt.value = this.stormTint * 0.7;
     const edge = this.storm.distToEdge(f.pos.x, f.pos.z);
@@ -481,6 +480,12 @@ export class Match {
     this.world.update(dt, this.time, cp, game.fog);
     this.world.render(cp);
     const hide = vr || this.cameraRig.scoped ? P : null; // VR: first person, your own body stays hidden
+    // sniper scope: enemies far beyond the normal character range stay visible through it
+    const zoom = this.zoomView || (this.zoomView = { pos: null, dir: null, cos: 0, max: 0 });
+    zoom.max = WEAPONS.sniper.range;
+    if (vr) { zoom.pos = this.xrPlayer.scopePos; zoom.dir = this.xrPlayer.aimDir; zoom.cos = 0.997; }
+    else { zoom.pos = this.cameraRig.pos; zoom.dir = this.cameraRig.dir; zoom.cos = 0.96; }
+    this.charView.zoom = (vr ? this.xrPlayer.scopeLive : this.cameraRig.scoped) ? zoom : null;
     this.charView.render(this.chars, alpha, cam, this.quality.charDist, hide, dt, vr ? this.cameraRig : null);
     this.effects.update(dt, this.combat.projectiles);
     this.effects.showWeakSpot(P.weakSpot && P.weakSpot.collider.alive ? P.weakSpot : null, P.alive && P.inv.sel === 0 && !this.controller.buildMode);

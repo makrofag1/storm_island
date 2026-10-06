@@ -68,7 +68,7 @@ export class TerrainView {
 }
 
 export class WaterView {
-  constructor(hm, scene, fog) {
+  constructor(hm, scene, fog, theme = null) {
     // Height texture for shoreline foam / depth tint.
     const N = 256;
     const data = new Uint8Array(N * N * 4);
@@ -90,6 +90,7 @@ export class WaterView {
       uFogFar: { value: fog.far },
       uHalf: { value: HALF },
       uSize: { value: WORLD_SIZE },
+      uHor: { value: new THREE.Vector3(...(theme ? theme.skyHor : [0.72, 0.86, 0.98])) },
     };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -105,7 +106,7 @@ export class WaterView {
       fragmentShader: /* glsl */`
         varying vec3 vW;
         uniform float uTime, uFogNear, uFogFar, uHalf, uSize;
-        uniform vec3 uFogColor;
+        uniform vec3 uFogColor, uHor;
         uniform sampler2D uH;
         void main(){
           vec2 uv = (vW.xz + uHalf) / uSize;
@@ -120,9 +121,13 @@ export class WaterView {
           float foam = smoothstep(1.6, 0.0, depth) * (0.55 + 0.45 * sin(depth * 7.0 - uTime * 2.6));
           col = mix(col, vec3(0.95, 0.98, 1.0), clamp(foam, 0.0, 1.0) * 0.65);
           float d = length(vW - cameraPosition);
+          // far out the sea reflects the sky at the horizon: blends into the sky's horizon colour, so
+          // there is no visible edge where the water plane ends (there is no distance fog any more)
+          col = mix(col, uHor, smoothstep(900.0, 2500.0, d) * 0.9);
           float f = smoothstep(uFogNear, uFogFar, d);
           col = mix(col, uFogColor, f);
           gl_FragColor = vec4(col, 1.0);
+          #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,
     });
@@ -163,11 +168,12 @@ export class SkyView {
           vec3 top = uTop;
           vec3 hor = uHor;
           vec3 col = mix(hor, top, smoothstep(0.0, 0.55, h));
-          col = mix(col, vec3(0.62, 0.78, 0.92), smoothstep(0.0, -0.3, h));
+          col = mix(col, hor, smoothstep(0.0, -0.3, h)); // below the horizon: matches the far sea
           float s = max(dot(normalize(vD), uSun), 0.0);
           col += vec3(1.0, 0.9, 0.7) * pow(s, 400.0) * 3.0 + vec3(1.0, 0.85, 0.6) * pow(s, 12.0) * 0.25;
           col = mix(col, uTint, uTintAmt);
           gl_FragColor = vec4(col, 1.0);
+          #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,
     });

@@ -58,6 +58,7 @@ export class XRPlayer {
     this.recoil = 0; this.hitFlash = 0; this.turnRate = 0; this.tpCd = 0;
     this.actions = mapActions(emptyPad(), emptyPad(), emptyPad(), emptyPad());
     this.aimY = 0.05; this.aimZ = -0.1; this.physAds = false; this.adsWas = false;
+    this.scopeLive = false; this.scopePos = new THREE.Vector3(); // sniper scope in use + its front lens (world)
     this.spectatePos = null;
     this.specTarget = null; this.specYaw = 0; this.specTurn = 0;
     const P = match.player;
@@ -94,6 +95,7 @@ export class XRPlayer {
 
     // haptics
     const ev = match.events;
+    ev.on('reloaded', (e) => { if (e.ch === P) this.pulseMain(0.3, 25); }); // loaded again: a short tick in the gun hand
     ev.on('shot', (e) => { if (e.ch === P) { const big = e.weapon === 'shotgun' || e.weapon === 'sniper' || e.weapon === 'rocket'; this.pulseMain(big ? 0.9 : 0.45, big ? 70 : 30); } });
     ev.on('damage', (e) => {
       if (e.attacker === P && e.target !== P) { this.pulseMain(e.head ? 0.6 : 0.3, 20); this.hitFlash = 0.15; this.hitHead = e.head; }
@@ -494,7 +496,7 @@ export class XRPlayer {
       else if (cur && cur.kind === 'consumable') key = 'c_' + cur.type;
     }
     this.held.visible = !!key;
-    if (!key) { this.heldItem = null; this.aimY = 0.05; this.aimZ = -0.1; this.physAds = false; return; }
+    if (!key) { this.heldItem = null; this.aimY = 0.05; this.aimZ = -0.1; this.physAds = false; this.scopeLive = false; return; }
     let item = this.heldItems[key];
     if (!item) { item = makeHeldItem(key); this.heldItems[key] = item; this.held.add(item.root); }
     if (this.heldItem !== item) {
@@ -509,7 +511,7 @@ export class XRPlayer {
     // aiming down the sights: your eye is on the sight line, behind the rear sight (cheek on the stock),
     // and you look along the barrel. (Tested on a Quest 3: a plain "rear sight within 20 cm" check never
     // fired for the rifle, whose rear sight sits 10 cm in front of the grip.)
-    this.physAds = false;
+    this.physAds = false; this.scopeLive = false;
     if (item.sight) {
       this.held.updateMatrixWorld(true);
       const eye = this.held.worldToLocal(_v.copy(this.headWorld));
@@ -517,16 +519,19 @@ export class XRPlayer {
       const behind = eye.z - item.sight.rear;
       const view = this.headDir(_v2);
       this.physAds = offLine < 0.07 && behind > -0.02 && behind < 0.5 && view.dot(this.aimDir) > 0.94;
+      // the scope image stays live whenever an eye is anywhere near the lens — not only while the
+      // strict ADS alignment above holds (that flickers while you track a target, and the lens then
+      // showed a frozen picture)
+      if (item.scope) this.scopeLive = this.physAds || this.actions.aim || (offLine < 0.16 && behind > -0.04 && behind < 0.45);
     }
   }
 
   /** Before the main render: the sniper scope draws its zoomed view (only while it is in use). */
   preRender() {
     const item = this.heldItem, P = this.match.player;
-    if (!item || !item.scope || !this.held.visible || this.game.paused) return;
-    if (!(this.physAds || this.actions.aim)) return;
+    if (!item || !item.scope || !this.held.visible || !this.scopeLive || this.game.paused) return;
     this.held.updateMatrixWorld(true);
-    const front = _v.set(0, item.sight.y, item.sight.front - 0.02).applyMatrix4(this.held.matrixWorld);
+    const front = this.scopePos.set(0, item.sight.y, item.sight.front - 0.02).applyMatrix4(this.held.matrixWorld);
     item.scope.render(this.game.renderer, this.match.scene, front, this.aimDir,
       [this.xr.rig, this.laser, this.dot, this.arc.line, this.arc.marker, this.glider.root, this.glider.lines]);
   }

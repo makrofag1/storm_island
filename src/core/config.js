@@ -37,14 +37,24 @@ export const RARITIES = [
 
 // renderScale > 1 supersamples (sharper edges even on 1080p screens where devicePixelRatio is 1);
 // softShadows = PCF soft filtering; wind = swaying grass; terrainRes = terrain mesh spacing (m);
-// cinematic = ACES filmic tone mapping (punchier colours and highlights).
+// cinematic = slightly brighter exposure; charDist = how far other players are drawn
+// (a sniper scope still shows them beyond that, up to the sniper's range).
+// There is no distance fog any more (the whole island is drawn anyway); drawDist only sets the camera
+// far plane and what the VR frame-rate guard trims.
+// "Fog" settings that put the fog beyond everything (= no fog) — the storm haze pulls it in.
+export const NO_FOG = { near: 6000, far: 9000 };
+
+// Colour grade applied to the whole 3D view (custom tone mapping, see Game.js): saturation, vibrance
+// (extra saturation for dull colours) and contrast around mid-grey — a brighter, punchier look.
+export const GRADE = { saturation: 1.12, vibrance: 0.3, contrast: 1.15 };
+
 export const QUALITY = {
-  low:    { pixelRatio: 0.75, renderScale: 1,    shadows: false, shadowSize: 0,    shadowRange: 0,   softShadows: false, terrainRes: 8, grass: 0,     grassRange: 0,   wind: false, drawDist: 380,  particles: 500,  charDist: 360 },
-  medium: { pixelRatio: 1.0,  renderScale: 1,    shadows: true,  shadowSize: 1024, shadowRange: 55,  softShadows: false, terrainRes: 4, grass: 5000,  grassRange: 110, wind: false, drawDist: 620,  particles: 1200, charDist: 420 },
-  // VR (Quest 3 browser): two eyes at 72-90 Hz on a mobile GPU -> short draw distance, small shadow
-  // map, sparse grass; 'vrPerf' drops shadows and grass completely
-  vr:     { pixelRatio: 1.0,  renderScale: 1,    shadows: true,  shadowSize: 1024, shadowRange: 35,  softShadows: false, terrainRes: 4, grass: 3000,  grassRange: 60,  wind: false, drawDist: 360,  particles: 600,  charDist: 380 },
-  vrPerf: { pixelRatio: 1.0,  renderScale: 1,    shadows: false, shadowSize: 0,    shadowRange: 0,   softShadows: false, terrainRes: 8, grass: 0,     grassRange: 0,   wind: false, drawDist: 300,  particles: 400,  charDist: 340 },
+  low:    { pixelRatio: 0.75, renderScale: 1,    shadows: false, shadowSize: 0,    shadowRange: 0,   softShadows: false, terrainRes: 8, grass: 0,     grassRange: 0,   wind: false, drawDist: 380,  particles: 500,  charDist: 450 },
+  medium: { pixelRatio: 1.0,  renderScale: 1,    shadows: true,  shadowSize: 1024, shadowRange: 55,  softShadows: false, terrainRes: 4, grass: 5000,  grassRange: 110, wind: false, drawDist: 620,  particles: 1200, charDist: 550 },
+  // VR (Quest 3 browser): two eyes at 72-90 Hz on a mobile GPU -> small shadow map, sparse grass;
+  // 'vrPerf' drops shadows and grass completely
+  vr:     { pixelRatio: 1.0,  renderScale: 1,    shadows: true,  shadowSize: 1024, shadowRange: 35,  softShadows: false, terrainRes: 4, grass: 3000,  grassRange: 60,  wind: false, drawDist: 360,  particles: 600,  charDist: 500 },
+  vrPerf: { pixelRatio: 1.0,  renderScale: 1,    shadows: false, shadowSize: 0,    shadowRange: 0,   softShadows: false, terrainRes: 8, grass: 0,     grassRange: 0,   wind: false, drawDist: 300,  particles: 400,  charDist: 450 },
   high:   { pixelRatio: 1.5,  renderScale: 1.25, shadows: true,  shadowSize: 4096, shadowRange: 120, softShadows: true,  terrainRes: 2, grass: 24000, grassRange: 150, wind: true,  drawDist: 1150, particles: 2600, charDist: 800, cinematic: true },
 };
 

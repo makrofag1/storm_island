@@ -45,9 +45,22 @@ function ironSights(s) {
 export class Scope {
   constructor() {
     this.rt = new THREE.WebGLRenderTarget(320, 320, { depthBuffer: true });
+    // Rendered exactly like the headset view (same colour grade, same sRGB output), so every material
+    // reuses the shader it already has. With a plain linear target three.js compiled a second variant
+    // of each material the first time it showed up in the scope -> the game froze for a moment while
+    // you aimed at something new (an enemy, a tracer, an impact).
+    this.rt.isXRRenderTarget = true;
+    this.rt.texture.colorSpace = THREE.SRGBColorSpace;
+    this.rt.texture.internalFormat = 'RGBA8'; // keep the encoded colours as they are (no 2nd conversion)
     this.cam = new THREE.PerspectiveCamera(6.5, 1, 0.3, 2400);
     const lensGeo = new THREE.CircleGeometry(0.036, 28);
-    this.lens = new THREE.Mesh(lensGeo, new THREE.MeshBasicMaterial({ map: this.rt.texture, fog: false, toneMapped: false }));
+    // the lens shows those already-encoded pixels unchanged
+    this.lens = new THREE.Mesh(lensGeo, new THREE.ShaderMaterial({
+      uniforms: { map: { value: this.rt.texture }, uBright: { value: 0.07 } }, // dark glass until it renders
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: 'uniform sampler2D map; uniform float uBright; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(map, vUv).rgb * uBright, 1.0); }',
+      fog: false, toneMapped: false,
+    }));
     const c = document.createElement('canvas'); c.width = c.height = 256;
     const g = c.getContext('2d');
     g.strokeStyle = '#000'; g.lineWidth = 3;
@@ -63,7 +76,6 @@ export class Scope {
     this.group = new THREE.Group();
     this.group.add(this.lens, this.reticle);
     this.active = false;
-    this.lens.material.color.set(0x111111); // dark glass until it renders
   }
 
   /**
@@ -86,7 +98,7 @@ export class Scope {
     renderer.shadowMap.autoUpdate = shadowAuto;
     renderer.xr.enabled = xrOn;
     hide.forEach((o, i) => { o.visible = vis[i]; });
-    this.lens.material.color.set(0xffffff);
+    this.lens.material.uniforms.uBright.value = 1;
   }
 
   dispose() {

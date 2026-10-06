@@ -175,7 +175,9 @@ badges mark the A/B/X/Y buttons. The cards are also shown for the first 20 s of 
 dot — and shots travel exactly along that sight line. Bring the gun up to your eye (rear sight within
 ~20 cm, barrel pointing where you look) and you aim down sights automatically (tighter spread, like
 holding the left trigger). The sniper has a working **scope**: its lens shows a magnified (~6.5°)
-picture of the world with a reticle.
+picture of the world with a reticle (live whenever your eye is near it), and enemies far beyond the
+normal view range (up to 1200 m) show up in it. A short vibration in the gun hand tells you the gun
+is loaded again.
 
 **Glider**: when you open it (A while skydiving) a striped canopy unfolds above your head with lines
 down to your hands; it banks into turns, sways, and folds away when you land.
@@ -230,8 +232,11 @@ Settings and bindings are stored in `localStorage`.
 * **Destruction & harvesting**: trees (wood), rocks (brick), building parts and cars (by material)
   can be pickaxed; hitting the blue weak spot doubles the yield. Bullets and explosions damage
   structures too.
-* **Weapons**: Assault Rifle, Pump Shotgun, SMG, Sniper (projectile with drop), Pistol, Rocket
-  Launcher, Grenades; 5 rarities (grey → gold) scale damage, reload time and accuracy. Bloom grows
+* **Weapons**: Assault Rifle, Pump Shotgun, SMG, Sniper (no spread at all — the bullet flies
+  straight along your aim and only drops with gravity: ~1.5 m at 300 m, ~6 m at 600 m; reloads
+  right after each shot, ~2.8 s per shot), Pistol, Rocket Launcher, Grenades. A trigger press while
+  the gun is still cooling down / reloading fires as soon as it is ready (if still held, or pressed
+  ≤ 0.35 s before); 5 rarities (grey → gold) scale damage, reload time and accuracy. Bloom grows
   with firing/moving/jumping and shrinks when crouching/aiming; recoil, headshots (×2–2.5), damage
   falloff, ammo types (light / medium / heavy / shells / rockets).
 * **Health**: 100 HP + 100 shield. Bandages (to 75 HP), Med Kit, Small Shield (+25 up to 50),
@@ -348,8 +353,12 @@ tools/build-single.mjs   single-file build (esbuild) -> dist/
   ~2 m buried and ~1 m gap.
 * Far-away bot fights are simulated fully (no statistical shortcut) — the simulation is cheap enough
   (~0.3 ms per tick for 50 characters).
-* Post-processing (storm vignette / tint) is done with fog, sky tint and a CSS overlay instead of a
-  render-target pass, to stay fast on integrated GPUs.
+* No distance fog: the whole island is visible to the horizon (the far sea blends into the sky). The
+  storm tint is done with a storm-only fog, sky tint and a CSS overlay instead of a render-target
+  pass, to stay fast on integrated GPUs.
+* Colour grade: a custom tone-mapping function (saturation, vibrance, contrast, soft highlight
+  roll-off — `GRADE` in `src/core/config.js`) runs in every material's shader, so it costs no extra
+  pass and works the same in VR.
 * Ctrl crouches as requested only in fullscreen with the Keyboard Lock API (Chrome / Edge); outside it
   browsers can't block Ctrl+W, so C is the default and pressing Ctrl in-game shows a warning.
 

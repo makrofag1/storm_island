@@ -39,7 +39,7 @@ export class World {
     this.chestSpots = this.gen.chests;
     this.ammoSpots = this.gen.ammo;
     this.terrain = new TerrainView(this.hm, quality.terrainRes, this.root);
-    this.water = new WaterView(this.hm, this.root, fog);
+    this.water = new WaterView(this.hm, this.root, fog, this.map.theme);
     this.sky = new SkyView(this.root, sunDir, this.map.theme);
     this.props = new Props(this.root, this.hash, events, this.gen.propPlacement(), quality.shadows, this.map.theme);
     this.decor.build(this.root, quality.shadows);

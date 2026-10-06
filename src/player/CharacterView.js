@@ -48,6 +48,7 @@ export class CharacterView {
     this.meshes.eyes.castShadow = false;
     this.counts = {};
     this.time = 0;
+    this.zoom = null; // { pos, dir, cos, max }: a scope view — characters in this cone are drawn up to max
   }
 
   put(key, m, color) {
@@ -77,8 +78,13 @@ export class CharacterView {
       const x = lerp(ch.prev.x, ch.pos.x, alpha), y = lerp(ch.prev.y, ch.pos.y, alpha), z = lerp(ch.prev.z, ch.pos.z, alpha);
       const dx = x - cp.x, dz = z - cp.z;
       const d2 = dx * dx + dz * dz;
-      if (d2 > maxDist * maxDist) continue;
-      if (view) {
+      if (d2 > maxDist * maxDist) {
+        // beyond the normal range: still drawn inside a sniper scope's narrow view (up to its range)
+        const zm = this.zoom;
+        if (!zm || d2 > zm.max * zm.max) continue;
+        const ex = x - zm.pos.x, ey = y + 1 - zm.pos.y, ez = z - zm.pos.z, el = Math.hypot(ex, ey, ez);
+        if ((ex * zm.dir.x + ey * zm.dir.y + ez * zm.dir.z) / el < zm.cos) continue;
+      } else if (view) {
         const dy = y + 1 - cp.y, d = Math.sqrt(d2 + dy * dy);
         if (d > 6 && (dx * view.dir.x + dy * view.dir.y + dz * view.dir.z) / d < 0.17) continue; // > ~80° off the view axis
       } else {

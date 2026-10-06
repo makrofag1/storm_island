@@ -31,9 +31,10 @@ export const WEAPONS = {
   },
   sniper: {
     name: 'Sniper Rifle', short: 'SNP', ammo: 'heavy', mag: 1, rate: 0.36, auto: false, damage: 104,
-    reload: 2.7, spread: 0.09, adsSpread: 0.0, bloomShot: 0, bloomMax: 0, bloomDecay: 1,
-    falloff: [400, 800, 1], head: 2.5, recoil: 0.06, range: 900, pellets: 1, structMul: 1, sound: 'sniper',
-    projectile: { speed: 320, gravity: 9 }, rarities: [2, 3, 4], fov: 22, scope: true,
+    // no spread at all: the bullet flies exactly where you aim and only drops with flight time (gravity)
+    reload: 2.7, spread: 0, adsSpread: 0, bloomShot: 0, bloomMax: 0, bloomDecay: 1,
+    falloff: [400, 800, 1], head: 2.5, recoil: 0.06, range: 1200, pellets: 1, structMul: 1, sound: 'sniper',
+    projectile: { speed: 500, gravity: 8, fromEye: true }, rarities: [2, 3, 4], fov: 22, scope: true,
   },
   pistol: {
     name: 'Pistol', short: 'PST', ammo: 'light', mag: 16, rate: 6.5, auto: false, damage: 24,
