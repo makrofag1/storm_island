@@ -272,7 +272,8 @@ src/combat/              Items (weapons/consumables/loot tables), Damage (pure m
 src/build/               grid (pure helpers), BuildSystem (placement, support graph, edit, ghost)
 src/ai/                  NavGrid (2 m grid + A*), Navigator (time-budgeted queue + path cache),
                          Bot (utility FSM, perception, navigation, combat, building, looting),
-                         Difficulty, Names
+                         Traits (archetypes + per-bot play-style traits), Tactics (pure storm /
+                         sense-check / judgment helpers), Difficulty, Names
 src/match/               Match (systems + flow), SkyBus, Storm (pure phase logic)
 src/ui/                  HUD (bars, hotbar, minimap, compass, kill feed, map, damage numbers),
                          Menus, Icons, TouchControls (joystick, look, buttons)
@@ -284,7 +285,8 @@ src/xr/                  WebXR VR: XRManager (session, play-space rig, controlle
                          scope), XRGlider (canopy animation), XRHints (controller button cards),
                          XRHud (wrist panel + head-locked messages), XRPanel (laser-clicked menus),
                          XRComfort (vignette, teleport arc), xrLogic (pure helpers)
-src/debug/               DebugOverlay (F3), DebugTools (?debug=1) + nav-grid visualization
+src/debug/               DebugOverlay (F3), DebugTools (?debug=1) + nav-grid visualization,
+                         VrTests (?vrtest=1 headset checks), BotSim (headless AI statistics)
 tests/                   node:test logic tests
 tools/use-nvidia-gpu.ps1 assigns browsers to the high-performance GPU (Windows)
 tools/build-single.mjs   single-file build (esbuild) -> dist/
@@ -301,8 +303,15 @@ tools/build-single.mjs   single-file build (esbuild) -> dist/
 
 ### Bot AI
 
-* **States**: Drop → (Land) → Loot / Gather → Rotate → Hunt / Fight → Heal (retreat / box up) → Dead,
-  chosen by utility scores (health, ammo, storm urgency, enemy distance, loadout) with hysteresis.
+* **States**: Drop → (Land) → Loot / Gather → Rotate → Hunt / Fight / Hold → Heal (retreat / box up) →
+  Dead, chosen by utility scores (health, ammo, storm urgency, enemy distance, loadout, traits) with
+  hysteresis.
+* **The storm comes first**: outside the safe zone a bot always heads back in (and shoots back on the
+  way) — it never fights, heals (shields don't help against the storm anyway), loots, hides or retreats
+  in the storm. Low-skill bots only notice a little later, but once their health would run out before
+  they get back in (time to death vs. time to safety, taking the shrinking edge into account) every bot
+  runs. Loot, cover, hiding spots, wander goals and chases are only picked where the zone will still be
+  when the bot gets there.
 * **Fair perception**: 110° FOV, line-of-sight raycasts, view range by difficulty and target posture,
   hearing (shots, sprinting footsteps, building, pickaxe), damage reveals the attacker's rough
   position, memory of the last known position. Bots sometimes decide to avoid a fight while looting.
@@ -310,6 +319,9 @@ tools/build-single.mjs   single-file build (esbuild) -> dist/
   destroyed), time-sliced A* (a search pauses when the per-frame budget is used up and resumes next
   frame, so it never causes hitches) with a binary heap, partial paths and smoothing, path cache, waypoint chains for stairs/upper floors, separation, and stuck recovery (jump → re-path →
   break the obstacle → build a ramp → step back onto the nearest walkable cell and pick a new goal).
+  Steep cells (a combined slope a character would slide back down) are not walkable, and a bot whose
+  goal is unreachable on the grid walks straight at it instead of waiting for a better path (it used
+  to freeze, e.g. on a mountainside in the storm).
   Bots keep walking toward the goal while a path is being searched, retry failed searches with a
   back-off, drop unreachable objectives (loot on a floor they can't reach, blocked rotate spots), and
   an idle watchdog re-plans any bot that stands still for ~5 s without a reason (fighting, healing,
@@ -329,16 +341,35 @@ tools/build-single.mjs   single-file build (esbuild) -> dist/
 * **Drop**: every bot first picks a landing spot anywhere within glide reach of the bus route (named
   POIs, small sites, lone buildings or open land; crowded spots are picked less often), then jumps
   when the bus passes closest to it — the lobby spreads over the island instead of one big cluster.
-* **Personalities** (`src/ai/Personality.js`), on top of difficulty, shown in the kill feed and the
-  spectate bar:
-  | | Personality | Play style |
+* **Traits = play style** (`src/ai/Traits.js`), separate from skill. Every bot has 11 traits (0–1)
+  plus a preferred weapon class (close / mid / long / explosive):
+  | Trait | Effect | Sense check / plan B |
   |---|---|---|
-  | 🔨 | Builder | builds walls/ramps on almost every hit and before the shots land, harvests 2× more materials |
-  | 🎯 | Sharpshooter | ~40% less aim error, more headshots, always ADS, loves snipers/ARs, keeps distance |
-  | ⚡ | Rusher | aggressive, faster reactions, shotguns/SMGs, closes in, rarely retreats, chases by sound |
-  | 🛡 | Survivor | avoids fights, heals early, uses cover, rotates ~25 s earlier, retreats sooner |
-  | 💣 | Tactician | grenades during fights, breaks enemy builds, loves rocket launchers |
-  | | All-rounder | the plain difficulty preset |
+  | build | walls / ramps when shot, building before the shots land, farms more materials | no materials → natural cover, then retreat; farms only when it is safe |
+  | caution | takes fewer fights, **hides** from a contact (Hold) | never in (or soon in) the storm; shot at / spotted up close → fights |
+  | push | fights closer | only with a shotgun / SMG and enough health, otherwise keeps its gun's range |
+  | weapon class | loot and weapon choice | falls back to the best gun for the distance |
+  | greed | loots longer and further | not in the storm, less with an enemy in sight |
+  | stormTiming | rotates early vs. plays the zone edge | the time-to-death rule above still applies |
+  | thirdParty | goes for the sound of other fights | needs a gun and health, only into the safe zone |
+  | highGround | rotates to high spots, ramps up to enemies | ramps need materials |
+  | patience | **ambush**: waits in cover until an unaware enemy walks into range | storm / being shot ends it |
+  | persistence | how long it chases a lost enemy | never into the storm |
+  | risk | fights on at low health, heals late | heals only inside the zone |
+  | utility | grenades in fights, rockets on builds | only when it has them |
+
+  Each bot starts from an **archetype** — 🔨 Builder, ⚡ Rusher, 🛡 Survivor, 🎯 Sharpshooter,
+  💣 Tactician, 🐺 Hunter, ⛺ Camper, 🎒 Scavenger, All-rounder — and every trait is shifted randomly,
+  so two Rushers still play differently. The kill feed shows the archetype icon; the spectate bar its
+  name and the bot's two most distinctive traits (e.g. "⚡ Rusher · builds a lot · patient ambusher").
+* **Skill** decides how sensibly a bot uses its traits: `judgment` (Easy 0.45 → Expert 0.97) is the
+  chance that it checks whether a trait-driven idea makes sense right now (Tactics.judge, re-rolled
+  every 4–8 s). An Easy Rusher sometimes charges in with a sniper or fumbles for a build without
+  materials before taking cover — but not always and not for long; an Expert almost never does.
+  `awareness` sets how quickly the storm is noticed. Traits never change aim or reactions.
+* **Tuning**: F3 shows a selected bot's traits and skill plus storm statistics; `src/debug/BotSim.js`
+  runs whole matches headless in the browser and reports storm deaths, time spent outside the zone and
+  behaviour per trait (e.g. builds per bot, hiding time, fights started, fighting distance).
 * **LOD**: decisions at ~12 Hz near the player, ~4.5 Hz mid-range, ~2 Hz far away.
 
 ## Design decisions & simplifications

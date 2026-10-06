@@ -1,6 +1,9 @@
-// Bot brain: utility-scored FSM (drop -> loot/gather -> rotate -> engage/fight -> retreat/heal -> build),
-// fair perception (FOV + line of sight + hearing + memory), nav-grid pathing with indoor waypoint
-// chains, stuck recovery, and the same Character intents/rules as the player.
+// Bot brain: utility-scored FSM (drop -> loot/gather -> rotate -> engage/fight/hold -> retreat/heal ->
+// build), fair perception (FOV + line of sight + hearing + memory), nav-grid pathing with indoor
+// waypoint chains, stuck recovery, and the same Character intents/rules as the player.
+// Play style comes from the bot's traits (Traits.js: builds, hides, pushes, loots, ...); how sensibly it
+// applies them comes from its difficulty (judgment: does it check that an idea makes sense right now).
+// The storm always wins: outside the safe zone a bot heads back in (only a slow reaction differs).
 import { WEAPONS, CONSUMABLES, itemScore } from '../combat/Items.js';
 import { yawTo, approachAngle, wrapAngle, yawDirX, yawDirZ, clamp } from '../core/math.js';
 import { tryPickup, autoPickup, openChest } from '../player/Interactions.js';
@@ -8,7 +11,8 @@ import { AUTO_GLIDE_ALT } from '../player/Motor.js';
 import { makeHit } from '../world/Physics.js';
 import { canUseConsumable } from '../combat/Damage.js';
 import { HALF } from '../core/config.js';
-import { assignPersona } from './Personality.js';
+import { rollProfile, behaviour, topTraits } from './Traits.js';
+import { stormThreat, safeAt, canPush, judge, TRAVEL_SPEED } from './Tactics.js';
 
 const hit = makeHit();
 const tmpLoot = [];
@@ -20,11 +24,19 @@ export class Bot {
     this.m = match;
     this.ch = ch;
     this.rng = rng;
-    // personality (builder, sharpshooter, rusher...) tweaks the difficulty skills + behaviour weights
-    const pa = assignPersona(diff, rng, persona);
-    this.d = diff = pa.diff;
-    this.p = pa.traits;
-    ch.persona = pa.persona;
+    // character: archetype + individually shifted traits (play style); the difficulty preset is the skill
+    const prof = rollProfile(rng, persona);
+    this.d = diff = { ...diff };
+    this.t = prof.traits;
+    this.p = behaviour(prof.traits);
+    if (this.t.weapon.long > 0.75) diff.ads = Math.min(1, diff.ads + 0.3); // scope lovers aim down sights
+    this.mem = diff.memory * this.p.memoryMul; // how long a lost enemy is remembered / chased
+    ch.persona = { ...prof.persona, traits: topTraits(prof.traits, 2, prof.persona.id) };
+    this.memo = new Map();       // judgment rolls (Tactics.judge)
+    this.outsideSince = null;    // when the bot left the safe zone
+    this.avoid = null;           // { ch, t }: a contact this bot decided to hide from
+    this.ambush = false; this.ambushFor = null; this.ambushRoll = false; this.ambushRange = 25;
+    this.coverT = 0; this.fumbleT = 0;
     ch.fireMul = diff.fireMul;
     ch.spreadMul = diff.spreadMul;
     ch.aimPoint = null;
@@ -57,7 +69,14 @@ export class Bot {
     ev.on('built', (e) => { if (e.owner) this.hear(e.owner, e.x, e.z, 45 * diff.hearing, 'build'); });
     ev.on('swing', (e) => this.hear(e.ch, e.ch.pos.x, e.ch.pos.z, 28 * diff.hearing, 'swing'));
     ev.on('damage', (e) => { if (e.target === ch && e.attacker && e.attacker !== ch) this.onDamaged(e.attacker); });
+    ev.on('death', (e) => { if (e.target === ch && e.cause === 'storm') { match.aiStats.stormDeaths++; match.aiStats.stormDeathStates[this.state] = (match.aiStats.stormDeathStates[this.state] || 0) + 1; } });
   }
+
+  /**
+   * Does the bot check whether its trait-driven idea (`key`) makes sense right now? A skilled bot
+   * nearly always does; a weak one sometimes skips the check for a few seconds and makes a bad call.
+   */
+  checks(key) { return judge(this.memo, key, this.d.judgment ?? 0.8, this.m.time, this.rng); }
 
   planDrop() {
     // Landing spot first, jump time second: pick a random destination anywhere within glide reach of
@@ -128,6 +147,12 @@ export class Bot {
 
   canSeeRecently() { return this.target && this.m.time - this.seenT < 0.6; }
 
+  /** Will (x,z) still be in the safe zone once we get there (plus `stay` seconds)? */
+  safeSpot(x, z, stay = 5, margin = 3) {
+    const eta = Math.hypot(x - this.ch.pos.x, z - this.ch.pos.z) / TRAVEL_SPEED;
+    return safeAt(this.m.storm, x, z, eta + stay, margin);
+  }
+
   // ------------------------------------------------------------------
   update(dt, focus) {
     const ch = this.ch, m = this.m;
@@ -170,9 +195,11 @@ export class Bot {
       case 'hunt': this.doHunt(dt); break;
       case 'heal': this.doHeal(dt); break;
       case 'retreat': this.doRetreat(dt); break;
+      case 'hold': this.doHold(dt); break;
       default: this.doWander(dt);
     }
     this.checkStuck(dt);
+    if (this.state !== 'rotate' && !m.storm.isInside(ch.pos.x, ch.pos.z)) m.aiStats.stormIdle += dt; // should stay ~0
     m.botMs = (m.botMs || 0) * 0.98 + (performance.now() - t0) * 0.02 * m.bots.length;
   }
 
@@ -229,9 +256,13 @@ export class Bot {
       const close = Math.hypot(seen.pos.x - ex, seen.pos.z - ez) < 7 + (d.engage || 0) * 30; // skilled bots never let someone walk up on them
       if (until === undefined || (until > 0 && m.time > until)) {
         const weapons = ch.inv.weapons().length;
-        const p = clamp(d.aggression * (0.45 + weapons * 0.2) + (m.time > 360 ? 0.3 : 0) + this.p.engageBonus + (d.engage || 0), 0.05, 0.97);
-        if (!close && !this.rng.chance(p)) { ig.set(seen, m.time + 15); seen = null; }
-        else ig.set(seen, -1); // engaged
+        const p = clamp(d.aggression * (0.45 + weapons * 0.2) + (m.time > 360 ? 0.3 : 0) + this.p.engage + (d.engage || 0), 0.05, 0.97);
+        if (!close && !this.rng.chance(p)) {
+          ig.set(seen, m.time + 15);
+          // a cautious bot doesn't just carry on: it hides from that contact for a while
+          if (this.rng.chance(this.p.holdChance)) this.avoid = { ch: seen, t: m.time };
+          seen = null;
+        } else ig.set(seen, -1); // engaged
       } else if (until > 0 && !close) seen = null;
     }
     if (seen) {
@@ -243,7 +274,7 @@ export class Bot {
       this.seenT = m.time;
       this.lastKnown.x = seen.pos.x; this.lastKnown.y = seen.pos.y; this.lastKnown.z = seen.pos.z;
       this.lastVel.x = seen.vel.x; this.lastVel.z = seen.vel.z;
-    } else if (this.target && (!this.target.alive || m.time - this.seenT > d.memory)) {
+    } else if (this.target && (!this.target.alive || m.time - this.seenT > this.mem)) {
       this.target = null;
     }
   }
@@ -270,56 +301,94 @@ export class Bot {
   }
 
   decide() {
-    const ch = this.ch, m = this.m, d = this.d, st = m.storm;
+    const ch = this.ch, m = this.m, d = this.d, st = m.storm, P = this.p;
     const hp = ch.health + ch.shield;
     const gun = this.hasUsableGun();
     const visible = this.canSeeRecently();
-    const known = this.target && this.target.alive && m.time - this.seenT < d.memory;
+    const known = this.target && this.target.alive && m.time - this.seenT < this.mem;
     const tdist = known ? Math.hypot(this.target.pos.x - ch.pos.x, this.target.pos.z - ch.pos.z) : 999;
+    const recentlyHit = m.time - (this.lastDamageT || -99) < 4;
     const scores = {};
-    // storm
+    // ---- storm: outside the zone nothing else matters ----
+    const threat = this.threat = stormThreat(st, ch.pos.x, ch.pos.z, ch.health);
     let storm = 0;
     if (m.phase !== 'bus' || st.timer < 30) {
-      if (!st.isInside(ch.pos.x, ch.pos.z, 2)) storm = 0.95 + (st.phase > 2 ? 0.1 : 0);
-      else if (!st.insideNext(ch.pos.x, ch.pos.z, 8)) {
-        const need = Math.hypot(st.next.x - ch.pos.x, st.next.z - ch.pos.z) - st.next.r * 0.7;
-        const time = Math.max(1, st.timeUntilClosed() - 12 - this.p.stormEarly);
-        storm = clamp(need / (time * 6.5), 0, 1) * 1.05;
-        if (st.state === 'shrink') storm = Math.max(storm, 0.55);
+      if (threat.outside) {
+        // awareness = how quickly the bot notices it is in the storm; when its health would run out
+        // before it gets back in (urgent), every bot runs, whatever it was doing
+        if (this.outsideSince === null) this.outsideSince = m.time;
+        const noticed = m.time - this.outsideSince >= (1 - (d.awareness ?? 0.7)) * 5;
+        storm = noticed || threat.urgent ? 2.2 : 0.95;
+      } else {
+        this.outsideSince = null;
+        if (!st.insideNext(ch.pos.x, ch.pos.z, 8)) {
+          const need = Math.hypot(st.next.x - ch.pos.x, st.next.z - ch.pos.z) - st.next.r * 0.7;
+          const time = Math.max(1, st.timeUntilClosed() / (st.speed || 1) - 12 - P.stormEarly);
+          storm = clamp(need / (time * 6.5), 0, 1) * 1.05;
+          if (st.state === 'shrink') storm = Math.max(storm, 0.55);
+        }
       }
     }
     scores.rotate = storm;
+    // spots that stay safe for a while (no healing, hiding or farming where the storm will be soon)
+    const safeHere = !threat.outside && safeAt(st, ch.pos.x, ch.pos.z, 10, 2);
+    // ---- fight / hunt ----
     scores.fight = known ? (gun ? 0.5 + d.aggression * 0.4 : (tdist < 5 ? 0.6 : 0.05)) * (hp < 50 ? 0.65 : 1) * (tdist > 110 && !visible ? 0.5 : 1) : 0;
-    if (known && !visible) scores.hunt = scores.fight * 0.85, scores.fight *= 0.4;
+    if (known && !visible) {
+      scores.hunt = scores.fight * 0.85, scores.fight *= 0.4;
+      // never chase into the storm
+      if (!this.safeSpot(this.lastKnown.x, this.lastKnown.z, 3)) scores.hunt = 0;
+    }
     const hs = this.healSlot();
-    scores.heal = hs >= 0 && hp < 150 ? (visible && tdist < 30 ? 0.35 : 0.72) * (1 - hp / 200) * 1.6 * this.p.healBias : 0;
-    // loot need
+    scores.heal = hs >= 0 && hp < 150 && safeHere ? (visible && tdist < 30 ? 0.35 : 0.72) * (1 - hp / 200) * 1.6 * P.healBias : 0;
+    // ---- loot / gather ----
     const weapons = ch.inv.weapons();
     let need = weapons.length === 0 ? 0.85 : weapons.length === 1 ? 0.55 : 0.32;
     if (!gun && weapons.length) need = 0.75;
     // under-equipped bots that aren't being shot at prefer to keep looting
     if (weapons.length < 2 && m.time - (this.lastDamageT || -99) > 5 && tdist > 30) { const e = d.engage || 0; scores.fight *= 0.7 + 0.3 * e; if (scores.hunt) scores.hunt *= 0.6 + 0.4 * e; }
-    need *= (0.6 + d.lootSmart * 0.4) * this.p.lootBias;
-    if (this.lootTarget && !this.lootValid(this.lootTarget)) this.lootTarget = null;
-    if (!this.lootTarget && need > 0.2 && m.time > this.lootGiveUpT && m.time > (this.lootSearchT || 0)) {
+    need *= (0.6 + d.lootSmart * 0.4) * P.lootBias;
+    if (this.lootTarget && (!this.lootValid(this.lootTarget) || !this.safeSpot(this.lootTarget.ref.x, this.lootTarget.ref.z, 3))) { this.giveUpLoot(this.lootTarget); }
+    if (!this.lootTarget && need > 0.2 && !threat.outside && m.time > this.lootGiveUpT && m.time > (this.lootSearchT || 0)) {
       this.lootTarget = this.findLoot();
       // nothing worth taking around: don't rescan every think tick (a scan touches every chest + nearby item)
       if (!this.lootTarget) this.lootSearchT = m.time + this.rng.range(2, 3.5);
     }
     if (m.time < 200 && weapons.length < 3 && m.time - (this.lastDamageT || -99) > 5) need *= 1.3;
-    scores.loot = this.lootTarget ? need : 0;
+    scores.loot = this.lootTarget ? need * (visible && tdist < 40 ? 0.4 : 1) : 0;
     const matsTotal = ch.inv.mats.wood + ch.inv.mats.brick + ch.inv.mats.metal;
-    const mg = this.p.matsGoal;
-    scores.gather = matsTotal < (150 * d.lootSmart + 30) * mg ? 0.3 : matsTotal < 300 * mg ? 0.12 : 0;
-    const recentlyHit = m.time - (this.lastDamageT || -99) < 4;
+    const mg = P.matsGoal;
+    // farming only when it is safe: no known enemy around and the zone stays here for a while
+    scores.gather = !known && safeHere ? (matsTotal < (150 * d.lootSmart + 30) * mg ? 0.3 : matsTotal < 300 * mg ? 0.12 : 0) : 0;
     if (known && tdist > 70 && !recentlyHit) { scores.fight *= 0.55; if (scores.hunt) scores.hunt *= 0.5; }
+    // ---- third-partying: go where others fight (needs a gun and health, and a safe spot) ----
     const heardD = this.heard ? Math.hypot(this.heard.x - ch.pos.x, this.heard.z - ch.pos.z) : 999;
-    scores.investigate = this.heard && m.time - this.heard.t < 8 && gun && heardD < 110 ? 0.38 * d.aggression * (m.time < 200 ? 0.5 : 1) : 0;
-    // losing the fight with nothing to heal: break line of sight and reset
+    const heardOk = this.heard && m.time - this.heard.t < 8 && gun && heardD < 110 && this.safeSpot(this.heard.x, this.heard.z, 3);
+    let inv = heardOk ? 0.38 * d.aggression * (m.time < 200 ? 0.5 : 1) * P.investigate : 0;
+    if (inv && hp < 60 && this.heard.kind !== 'hit' && this.checks('investigate')) inv *= 0.3; // hurt: let them fight
+    scores.investigate = inv;
+    // ---- losing the fight with nothing to heal: break line of sight and reset ----
     const hasHeal = hs >= 0;
-    const R = this.p.retreatHp;
+    const R = P.retreatHp;
     scores.retreat = visible && gun && tdist < 45 && hp < R && (!hasHeal || tdist < 25) ? 0.6 + (R - hp) / 100 : 0;
     if (this.inCover && this.state === 'retreat' && hp < R + 20 && this.stateT < 10) scores.retreat = Math.max(scores.retreat, 0.55);
+    // ---- hold: hide from a contact (caution) or wait in ambush (patience) ----
+    scores.hold = 0;
+    const av = this.avoid;
+    if (av && (!av.ch.alive || m.time - av.t > 14)) this.avoid = null;
+    if (safeHere && !recentlyHit) {
+      if (this.avoid && !(visible && this.target === this.avoid.ch && tdist < 12)) scores.hold = 0.6 + this.t.caution * 0.25;
+      // ambush: an enemy that hasn't noticed us, far enough away, and a gun that wants it closer
+      if (visible && gun && tdist > 28 && P.ambush > 0) {
+        const t = this.target, cur = ch.inv.current();
+        if (this.ambushFor !== t) { this.ambushFor = t; this.ambushRoll = this.rng.chance(Math.min(0.9, P.ambush * 0.8)); }
+        const facing = (yawDirX(t.yaw) * (ch.pos.x - t.pos.x) + yawDirZ(t.yaw) * (ch.pos.z - t.pos.z)) / Math.max(1, tdist);
+        if (this.ambushRoll && facing < 0.7 && !(cur && cur.type === 'sniper')) {
+          scores.hold = Math.max(scores.hold, 1.0);
+          this.ambushRange = clamp((cur && cur.kind === 'weapon' ? PREF_RANGE[cur.type] : 15) * 1.6, 12, 40);
+        }
+      }
+    }
     scores.wander = 0.15;
     // hysteresis
     const cur = this.state === 'hunt' && !scores.hunt ? 'fight' : this.state;
@@ -330,6 +399,7 @@ export class Bot {
       best = 'hunt';
       if (!known && this.heard) { this.lastKnown.x = this.heard.x; this.lastKnown.z = this.heard.z; this.lastKnown.y = ch.pos.y; this.investigating = true; }
     } else this.investigating = false;
+    if (best === 'hold') this.ambush = !this.avoid || scores.hold >= 1.0;
     if (best !== this.state) this.setState(best);
   }
 
@@ -390,7 +460,7 @@ export class Bot {
     const goalMoved = !this.goal || Math.hypot(this.goal.x - x, this.goal.z - z) > 4;
     if (goalMoved) {
       this.goal = { x, z };
-      this.path = null;
+      this.path = null; this.partialEnd = null;
       // short, clear hop: walk straight
       if (Math.hypot(x - ch.pos.x, z - ch.pos.z) < 10 && m.nav.clearLine(m.nav.idx(ch.pos.x, ch.pos.z), m.nav.idx(x, z))) {
         this.path = { points: [{ x, z }], complete: true };
@@ -408,8 +478,17 @@ export class Bot {
     let p = pts[this.pathIdx];
     while (p && Math.hypot(p.x - ch.pos.x, p.z - ch.pos.z) < 1.3) { this.pathIdx++; p = pts[this.pathIdx]; }
     if (!p) {
-      if (!this.path.complete && Math.hypot(x - ch.pos.x, z - ch.pos.z) > 3) { this.path = null; m.navigator.request(this, x, z); }
-      else this.seek(x, z, sprint);
+      if (!this.path.complete && Math.hypot(x - ch.pos.x, z - ch.pos.z) > 3) {
+        // end of a partial path (the goal isn't reachable on the nav grid from here). If the last
+        // partial path also ended right here, searching again won't help - it used to return the
+        // same one-cell path forever and the bot stood still (even in the storm): walk straight at
+        // the goal instead (slopes can be walked down, the stuck handler deals with walls)
+        const pe = this.partialEnd;
+        this.path = null;
+        if (pe && Math.hypot(ch.pos.x - pe.x, ch.pos.z - pe.z) < 3) { this.pathFailT = m.time; this.pathFails++; }
+        else { this.partialEnd = { x: ch.pos.x, z: ch.pos.z }; m.navigator.request(this, x, z); }
+      }
+      this.seek(x, z, sprint);
       return;
     }
     this.seek(p.x, p.z, sprint);
@@ -440,6 +519,7 @@ export class Bot {
     else if (this.state === 'gather' && this.gatherTarget) { this.ignoreCols.add(this.gatherTarget); this.gatherTarget = null; }
     else if (this.state === 'rotate') this.rotateGoal = null;
     else if (this.state === 'hunt') { this.target = null; this.heard = null; }
+    else if (this.state === 'hold') { this.avoid = null; this.ambushRoll = false; }
     this.wanderGoal = null;
     this.path = null; this.goal = null; this.chain = null; this.exitChain = null; this.pathFails = 0;
     m.navigator.cancel(this);
@@ -476,7 +556,7 @@ export class Bot {
     s.x = ch.pos.x; s.z = ch.pos.z; s.t = 0;
     // idle watchdog: standing still without a reason (not fighting, healing, harvesting, breaking,
     // hiding) for ~5 s means the current objective is broken -> drop it
-    const busy = ch.useT > 0 || ch.reloadT > 0 || this.breakT > 0 || it.fire || this.state === 'fight' || this.state === 'heal' || (this.state === 'retreat' && this.inCover);
+    const busy = ch.useT > 0 || ch.reloadT > 0 || this.breakT > 0 || it.fire || this.state === 'fight' || this.state === 'heal' || this.state === 'hold' || (this.state === 'retreat' && this.inCover);
     if (moved < 0.8 && !busy && !wants) {
       this.idleT += 1.6;
       if (this.idleT >= 4.8) { this.idleT = 0; this.stuckLevel = 0; this.abandonGoal(); return; }
@@ -553,7 +633,7 @@ export class Bot {
 
   findLoot() {
     // unarmed bots search much further (they need a gun more than anything)
-    return this.findLootIn(45) || (this.ch.inv.weapons().length === 0 ? this.findLootIn(150) : null);
+    return this.findLootIn(this.p.lootRadius) || (this.ch.inv.weapons().length === 0 ? this.findLootIn(150) : null);
   }
 
   findLootIn(R) {
@@ -564,12 +644,13 @@ export class Bot {
       const d = Math.hypot(c.x - ch.pos.x, c.z - ch.pos.z) + Math.abs(c.y - ch.pos.y) * 2;
       if (d > R * 1.3) continue;
       if (!c.chain && Math.abs(c.y - ch.pos.y) > 1.6 && c.y - m.world.hm.height(c.x, c.z) > 1.8) continue; // upper floor, no known way up
+      if (!this.safeSpot(c.x, c.z, 4)) continue; // in (or soon in) the storm
       const s = (c.kind === 'chest' ? 2.2 : 0.8) / (1 + d / 12);
       if (s > bestS) { bestS = s; best = { kind: 'chest', ref: c, chain: c.chain }; }
     }
     const list = m.world.loot.query(ch.pos.x, ch.pos.z, R, tmpLoot);
     for (const itm of list) {
-      if (!itm.resting || this.ignoreLoot.has(itm.id)) continue;
+      if (!itm.resting || this.ignoreLoot.has(itm.id) || !this.safeSpot(itm.x, itm.z, 3)) continue;
       const k = itm.item.kind;
       if (k === 'ammo' || k === 'material') {
         const d = Math.hypot(itm.x - ch.pos.x, itm.z - ch.pos.z);
@@ -609,7 +690,7 @@ export class Bot {
     const r = t.ref;
     const dx = r.x - ch.pos.x, dz = r.z - ch.pos.z, dy = r.y - ch.pos.y;
     const d = Math.hypot(dx, dz);
-    if (m.time - t.t0 > 25) { this.giveUpLoot(t); return; }
+    if (m.time - t.t0 > 15 + this.t.greed * 20) { this.giveUpLoot(t); return; }
     // standing right under / above the item with no route between floors: give up quickly
     const climbing = (this.chain && this.chainIdx >= 0 && this.chainIdx < this.chain.length) || this.exitChain;
     if (d < 2.2 && Math.abs(dy) >= 1.6 && !climbing) {
@@ -671,12 +752,19 @@ export class Bot {
     const st = this.m.storm, rng = this.rng;
     if (this.rotatePhase !== st.phase || !this.rotateGoal) {
       this.rotatePhase = st.phase;
+      // a spot well inside the next zone; high-ground lovers take the highest of a few candidates
+      const hm = this.m.world.hm, hg = this.p.highGround;
+      let best = null, bs = -Infinity;
       for (let i = 0; i < 12; i++) {
         const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * st.next.r * 0.6;
         const x = st.next.x + Math.cos(a) * r, z = st.next.z + Math.sin(a) * r;
-        this.rotateGoal = { x, z };
-        if (this.m.world.hm.isLand(x, z) && this.m.nav.walkableAt(x, z)) break;
+        if (!best) best = { x, z };
+        if (!hm.isLand(x, z) || !this.m.nav.walkableAt(x, z)) continue;
+        const sc = hg > 0.55 ? hm.height(x, z) * (hg - 0.5) + rng.next() * 3 : 100 - i;
+        if (sc > bs) { bs = sc; best = { x, z }; }
+        if (hg <= 0.55) break;
       }
+      this.rotateGoal = best;
     }
     return this.rotateGoal;
   }
@@ -701,7 +789,7 @@ export class Bot {
       // drift toward the safe zone, otherwise nearby POI/random
       const tx = st.next.x + (ch.pos.x - st.next.x) * 0.6, tz = st.next.z + (ch.pos.z - st.next.z) * 0.6;
       this.wanderGoal = { x: tx + this.rng.range(-40, 40), z: tz + this.rng.range(-40, 40) };
-      if (!this.m.world.hm.isLand(this.wanderGoal.x, this.wanderGoal.z)) this.wanderGoal = { x: st.next.x, z: st.next.z };
+      if (!this.m.world.hm.isLand(this.wanderGoal.x, this.wanderGoal.z) || !this.safeSpot(this.wanderGoal.x, this.wanderGoal.z, 10)) this.wanderGoal = { x: st.next.x + this.rng.range(-0.3, 0.3) * st.next.r, z: st.next.z + this.rng.range(-0.3, 0.3) * st.next.r };
       this.stateT = 0;
     }
     this.navTo(this.wanderGoal.x, this.wanderGoal.z, null, false);
@@ -787,6 +875,20 @@ export class Bot {
     const visible = this.canSeeRecently();
     if (!this.equipBest(dist)) { ch.inv.sel = 0; }
     if (!visible) { this.doHunt(dt); return; }
+    // a bad call (wanted to build, had no materials, didn't check): stands there for a moment
+    if (this.fumbleT > 0) { this.fumbleT -= dt; this.combatAim(dt, false); if (this.fumbleT <= 0) this.coverT = 2; return; }
+    // plan B when building isn't possible: natural cover, shoot back from there
+    if (this.coverT > 0) {
+      this.coverT -= dt;
+      const covered = this.takeCover(this.lastDamageFrom && this.lastDamageFrom.alive ? this.lastDamageFrom : t);
+      if (this.coverCache && this.coverCache.p) {
+        const c0 = ch.inv.current();
+        if (covered && c0 && c0.kind === 'weapon' && c0.mag === 0) ch.intent.reload = true;
+        this.combatAim(dt, true);
+        return;
+      }
+      this.coverT = 0; // nothing to hide behind: fight on (decide() may still pick retreat)
+    }
     let cur = ch.inv.current();
     // out of ammo in the magazine and nothing else loaded: reload behind cover
     const mat0 = m.build.bestMaterial(ch);
@@ -805,7 +907,12 @@ export class Bot {
     } else if (this.p.fightGrenades && this.grenadeCd <= 0 && dist > 8 && dist < 28 && this.grenadeSlot() >= 0 && this.rng.next() < this.p.fightGrenades * dt) this.nadeT = 1.5;
     this.combatAim(dt, true);
     cur = ch.inv.current();
-    const pref = cur && cur.kind === 'weapon' ? PREF_RANGE[cur.type] * this.p.rangeMul : 2;
+    // preferred distance: the gun's range, shifted by the push trait - but charging in only makes sense
+    // with a close-range gun and some health, and hanging back makes no sense with a shotgun
+    let rangeMul = this.p.rangeMul;
+    if (rangeMul < 1 && !(canPush(ch.inv) && ch.health + ch.shield > 45) && this.checks('push')) rangeMul = 1;
+    if (rangeMul > 1 && cur && (cur.type === 'shotgun' || cur.type === 'smg') && this.checks('range')) rangeMul = 1;
+    const pref = cur && cur.kind === 'weapon' ? PREF_RANGE[cur.type] * rangeMul : 2;
     // movement: approach / keep range / strafe
     const tx = t.pos.x - ch.pos.x, tz = t.pos.z - ch.pos.z;
     const ux = tx / Math.max(0.01, dist), uz = tz / Math.max(0.01, dist);
@@ -825,13 +932,20 @@ export class Bot {
     // building under fire
     const mat = m.build.bestMaterial(ch);
     const recentlyHit = m.time - (this.lastDamageT || -99) < 0.7;
+    const buildChance = Math.min(0.98, d.buildChance * this.p.buildMul);
+    if (!mat && recentlyHit && this.buildCd <= 0 && this.rng.next() < buildChance) {
+      // wants to wall up but has no materials: a sensible bot goes for natural cover right away,
+      // a careless one first fumbles for a moment (then does the same)
+      this.buildCd = 1.5;
+      if (this.checks('build')) this.coverT = 2; else this.fumbleT = 0.6;
+    }
     if (mat && this.buildCd <= 0 && ch.grounded) {
-      if (recentlyHit && this.rng.next() < d.buildChance) {
+      if (recentlyHit && this.rng.next() < buildChance) {
         const a = this.lastDamageFrom || t;
         if (m.build.wallToward(ch, a.pos.x, a.pos.z, mat)) this.buildCd = this.rng.range(1.2, 2.6) / this.p.buildRate;
         else this.buildCd = 0.5;
-        if (this.rng.next() < d.buildChance * 0.5 && t.pos.y - ch.pos.y > 2.5 && dist < 28) m.build.rampToward(ch, ux, uz, mat);
-      } else if (t.pos.y - ch.pos.y > 3 && dist < 25 && this.rng.next() < d.buildChance * 0.6) {
+        if (this.rng.next() < buildChance * 0.5 && t.pos.y - ch.pos.y > 2.5 && dist < 28) m.build.rampToward(ch, ux, uz, mat);
+      } else if (t.pos.y - ch.pos.y > 3 && dist < 25 && this.rng.next() < buildChance * (0.3 + this.p.highGround * 0.7)) {
         m.build.rampToward(ch, ux, uz, mat);
         this.buildCd = 0.6;
         it.mx = ux; it.mz = uz;
@@ -854,14 +968,15 @@ export class Bot {
     const lk = { x: this.lastKnown.x + (this.investigating ? 0 : this.lastVel.x * since * 0.8), y: this.lastKnown.y, z: this.lastKnown.z + (this.investigating ? 0 : this.lastVel.z * since * 0.8) };
     const d = Math.hypot(lk.x - ch.pos.x, lk.z - ch.pos.z);
     // target hiding nearby: grenade it or shoot through its builds
-    if (t && t.alive && !this.investigating && m.time - this.seenT < this.d.memory) {
+    if (t && t.alive && !this.investigating && m.time - this.seenT < this.mem) {
       if (this.grenadeCd <= 0 && d > 6 && d < 30 && this.grenadeSlot() >= 0 && this.rng.next() < (this.d.grenade ?? 0.5)) {
         if (this.throwGrenadeAt(t.pos.x, t.pos.y + 0.5, t.pos.z, dt)) return;
       }
       if (this.breachCover(dt)) return;
     }
     this.equipBest(d);
-    if (d < 3 || this.stateT > 20) {
+    if (!this.safeSpot(lk.x, lk.z, 2)) { this.target = null; this.heard = null; this.thinkT = 0; return; } // not into the storm
+    if (d < 3 || this.stateT > this.p.huntTime) {
       if (!this.canSeeRecently()) { this.target = null; this.heard = null; this.thinkT = 0; }
       ch.yaw += dt * 2; // look around
       return;
@@ -872,6 +987,7 @@ export class Bot {
 
   doHeal(dt) {
     const ch = this.ch, m = this.m, d = this.d;
+    if (this.threat && this.threat.outside) { this.thinkT = 0; ch.useT = 0; return; } // decide() sends it out of the storm
     const visible = this.canSeeRecently();
     const t = this.target;
     if (visible && t) {
@@ -901,6 +1017,48 @@ export class Bot {
     ch.intent.firePressed = ch.useT <= 0;
   }
 
+
+  /**
+   * Hold: hide from a contact (cautious bots) or wait in cover for an unaware enemy to come into range
+   * (patient bots, `this.ambush`). Ends - with a fight - when it is shot, spotted up close or the enemy
+   * walks into range; decide() ends it for the storm (cover spots are always picked inside the zone).
+   */
+  doHold(dt) {
+    const ch = this.ch, m = this.m;
+    const av = this.avoid && this.avoid.ch.alive ? this.avoid.ch : null;
+    const th = this.ambush ? (this.target && this.target.alive ? this.target : av) : av || (this.target && this.target.alive ? this.target : null);
+    if (!th || this.stateT > (this.ambush ? 25 : 16)) { this.avoid = null; this.ambushRoll = false; this.thinkT = 0; this.setState('wander'); return; }
+    const dist = Math.hypot(th.pos.x - ch.pos.x, th.pos.z - ch.pos.z);
+    const shot = m.time - (this.lastDamageT || -99) < 1.5;
+    if (shot || dist < (this.ambush ? this.ambushRange : 10)) {
+      // spotted / shot at / the enemy walked in: no more hiding
+      this.target = th; this.seenT = m.time; this.lastKnown.x = th.pos.x; this.lastKnown.y = th.pos.y; this.lastKnown.z = th.pos.z;
+      if (this.ignored) this.ignored.set(th, -1);
+      this.avoid = null; this.ambushRoll = false; this.ambush = false;
+      this.reactT = Math.min(this.reactT, m.time + 0.05); // an ambusher is ready to shoot
+      this.setState('fight');
+      return;
+    }
+    const arrived = this.takeCover(th);
+    const it = ch.intent;
+    if (!this.coverCache || !this.coverCache.p) {
+      if (this.ambush) { it.crouch = true; ch.yaw = approachAngle(ch.yaw, yawTo(th.pos.x - ch.pos.x, th.pos.z - ch.pos.z), 6 * dt); }
+      else {
+        // nothing to hide behind: slip away from the contact (inside the zone)
+        const ax = ch.pos.x - th.pos.x, az = ch.pos.z - th.pos.z, l = Math.hypot(ax, az) || 1;
+        const gx = ch.pos.x + ax / l * 12, gz = ch.pos.z + az / l * 12;
+        if (this.safeSpot(gx, gz, 5)) this.seek(gx, gz, false); else { it.crouch = true; }
+      }
+      return;
+    }
+    if (arrived) {
+      it.crouch = true;
+      ch.yaw = approachAngle(ch.yaw, yawTo(th.pos.x - ch.pos.x, th.pos.z - ch.pos.z), 6 * dt);
+      const cur = ch.inv.current();
+      if (cur && cur.kind === 'weapon' && cur.mag < WEAPONS[cur.type].mag) it.reload = true;
+      if (this.ambush) this.equipBest(this.ambushRange);
+    }
+  }
 
   // ---------------- advanced tactics ----------------
   /**
@@ -936,6 +1094,7 @@ export class Bot {
       if (bc && m.time - bc.t < 8 && Math.hypot(px - bc.x, pz - bc.z) < 2.5) continue;
       const dBot = Math.hypot(px - ch.pos.x, pz - ch.pos.z);
       if (dBot > maxDist) continue;
+      if (!this.safeSpot(px, pz, 10, 2)) continue; // never hide where the storm will be
       checks++;
       const gy = m.world.hm.height(px, pz);
       if (m.physics.lineOfSight(tx, ty, tz, px, gy + 1.2, pz)) continue;  // threat would still see us
@@ -994,9 +1153,9 @@ export class Bot {
   /** If the target hides behind a build piece, shoot (or rocket) the piece. Returns true if acting. */
   breachCover(dt) {
     const ch = this.ch, m = this.m, t = this.target;
-    if (!t || !t.alive || this.rng.next() > (this.d.breach ?? 0.5) + 0.3) return false;
+    if (!t || !t.alive || this.rng.next() > (this.d.breach ?? 0.5) + 0.3 + this.p.breach) return false;
     const dist = Math.hypot(t.pos.x - ch.pos.x, t.pos.z - ch.pos.z);
-    if (dist > 45 || m.time - this.seenT > this.d.memory) return false;
+    if (dist > 45 || m.time - this.seenT > this.mem) return false;
     const ex = ch.pos.x, ey = ch.eyeY, ez = ch.pos.z;
     const txx = t.pos.x, tyy = t.pos.y + t.height * 0.6, tzz = t.pos.z;
     const dx = txx - ex, dy = tyy - ey, dz = tzz - ez, l = Math.hypot(dx, dy, dz);
@@ -1060,6 +1219,7 @@ export class Bot {
       `-- bot ${ch.name} [${this.d.name} ${ch.persona.id}] state=${this.state} hp=${Math.ceil(ch.health)}+${Math.ceil(ch.shield)} mode=${ch.mode}`,
       `   target=${this.target ? this.target.name + (this.canSeeRecently() ? ' (visible)' : ' (memory)') : '-'}  weapon=${cur ? cur.type + ' r' + cur.rarity + ' ' + cur.mag : 'pickaxe'}`,
       `   goal=${this.goal ? this.goal.x.toFixed(0) + ',' + this.goal.z.toFixed(0) : '-'}  path=${this.path ? (this.pathIdx + '/' + this.path.points.length) : '-'}  chain=${this.chain ? this.chainIdx + '/' + this.chain.length : '-'}  stuck=${this.stuckLevel}  mats=${ch.inv.mats.wood}/${ch.inv.mats.brick}/${ch.inv.mats.metal}`,
+      `   skill: judgment ${this.d.judgment} awareness ${this.d.awareness}  traits: ${Object.entries(this.t).filter(([k]) => k !== 'weapon').map(([k, v]) => k + ' ' + v.toFixed(2)).join(' ')}  weapons: ${Object.entries(this.t.weapon).map(([k, v]) => k + ' ' + v.toFixed(2)).join(' ')}`,
     ];
   }
 }

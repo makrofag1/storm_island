@@ -47,11 +47,16 @@ export class NavGrid {
         const k = j * n + i;
         if (i < 6 || j < 6 || i >= n - 6 || j >= n - 6) { this.base[k] = 0; continue; }
         const h = hm.height(x, z);
-        const s = Math.max(Math.abs(hm.height(x + cs, z) - h), Math.abs(hm.height(x - cs, z) - h), Math.abs(hm.height(x, z + cs) - h), Math.abs(hm.height(x, z - cs) - h)) / cs;
+        const hx1 = hm.height(x + cs, z), hx0 = hm.height(x - cs, z), hz1 = hm.height(x, z + cs), hz0 = hm.height(x, z - cs);
+        const s = Math.max(Math.abs(hx1 - h), Math.abs(hx0 - h), Math.abs(hz1 - h), Math.abs(hz0 - h)) / cs;
+        // combined gradient (a diagonal slope is steeper than either axis shows): characters slide
+        // back on terrain steeper than ~1.0 (Motor: normal.y < 0.7), so such cells are not walkable —
+        // bots used to walk into them forever (e.g. stuck on a mountainside in the storm)
+        const g = Math.hypot(hx1 - hx0, hz1 - hz0) / (2 * cs);
         let c = 1;
         if (h < -1.3) c = 5;            // swimming
-        else if (s > 0.85) c = 0;       // cliff
-        else if (s > 0.5) c = 3;
+        else if (s > 0.85 || g > 0.93) c = 0; // cliff
+        else if (s > 0.5 || g > 0.6) c = 3;
         this.base[k] = c;
       }
     }

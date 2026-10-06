@@ -11,7 +11,6 @@ import { SpatialHash, makeCollider, C_BOX, C_RAMP, surfaceY } from '../src/world
 import { pieceKey, pieceBounds, tileBounds, wallSlotFacing, dirFromVector, levelAt, boundsOverlap } from '../src/build/grid.js';
 import { Inventory } from '../src/player/Inventory.js';
 import { prettyRenderer, classifyRenderer } from '../src/core/gpu.js';
-import { assignPersona, PERSONAS } from '../src/ai/Personality.js';
 import { DIFFICULTIES, difficultyFor } from '../src/ai/Difficulty.js';
 import { resolveMapOptions, MAP_OPTIONS } from '../src/world/MapOptions.js';
 
@@ -226,25 +225,6 @@ test('GPU renderer strings are parsed and classified', () => {
 });
 
 // ---------- bot personalities ----------
-test('bot personalities tune skills without touching the shared preset', () => {
-  const base = DIFFICULTIES.medium;
-  const snap = JSON.stringify(base);
-  const sharp = assignPersona(base, new RNG(1), 'sharpshooter');
-  assert.equal(sharp.persona.id, 'sharpshooter');
-  assert.ok(sharp.diff.aimError < base.aimError, 'sharpshooter aims better');
-  assert.ok(sharp.traits.rangeMul > 1, 'sharpshooter keeps distance');
-  const builder = assignPersona(base, new RNG(1), 'builder');
-  assert.ok(builder.diff.buildChance > base.buildChance && builder.traits.preBuild > 0, 'builder builds more');
-  const rusher = assignPersona(base, new RNG(1), 'rusher');
-  assert.ok(rusher.diff.aggression > base.aggression && rusher.traits.rangeMul < 1, 'rusher pushes close');
-  assert.equal(JSON.stringify(base), snap, 'preset object unchanged');
-  // random picks are deterministic per seed and cover every personality over a lobby
-  const ids = new Set();
-  for (let i = 0; i < 200; i++) ids.add(assignPersona(base, new RNG(i)).persona.id);
-  assert.deepEqual([...ids].sort(), Object.keys(PERSONAS).sort());
-  assert.equal(assignPersona(base, new RNG(7)).persona.id, assignPersona(base, new RNG(7)).persona.id);
-});
-
 // ---------- map options / difficulty ----------
 test('map options resolve deterministically and change the terrain', () => {
   const a = resolveMapOptions({ mapTheme: 'random', mapWater: 'random' }, new RNG(5));
@@ -269,6 +249,7 @@ test('difficulty presets get strictly harder', () => {
   for (let i = 1; i < order.length; i++) {
     assert.ok(order[i].aimError < order[i - 1].aimError && order[i].reaction < order[i - 1].reaction);
     assert.ok(order[i].engage >= order[i - 1].engage);
+    assert.ok(order[i].judgment > order[i - 1].judgment && order[i].awareness > order[i - 1].awareness, 'better decisions on harder levels');
   }
   assert.equal(difficultyFor('expert', 0, new RNG(1)).name, 'expert');
 });

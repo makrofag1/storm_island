@@ -92,7 +92,7 @@ export class Match {
     this.wireEvents();
     this.tmpV = new THREE.Vector3();
     this.lastPhaseMsg = null;
-    this.aiStats = { cover: 0, grenades: 0, breach: 0, retreats: 0, leads: 0, unstuck: 0 };
+    this.aiStats = { cover: 0, grenades: 0, breach: 0, retreats: 0, leads: 0, unstuck: 0, stormIdle: 0, stormDeaths: 0, stormDeathStates: {} };
     this.xrPlayer = null;
     if (game.xr.active) this.ensureXR();
   }
@@ -516,6 +516,7 @@ export class Match {
     const states = {};
     for (const b of this.bots) if (b.ch.alive) states[b.state] = (states[b.state] || 0) + 1;
     lines.push(`AI tactics: cover ${this.aiStats.cover} grenades ${this.aiStats.grenades} breach shots ${this.aiStats.breach} retreats ${this.aiStats.retreats} unstuck ${this.aiStats.unstuck}`);
+    lines.push(`AI storm: ${this.aiStats.stormIdle.toFixed(0)} bot-seconds outside the zone not rotating, ${this.aiStats.stormDeaths} storm deaths ${JSON.stringify(this.aiStats.stormDeathStates)}`);
     lines.push('bot states: ' + Object.entries(states).map(([k, v]) => `${k}:${v}`).join(' '));
     // selected bot: nearest to the crosshair
     let sel = null, bestA = 0.25;

@@ -488,7 +488,7 @@ export class HUD {
     this.el.spectate.classList.toggle('hidden', !spec);
     if (spec) {
       const tgt = m.spectateTarget;
-      const html = `<div class="spec-title">${tgt ? `Spectating <b>${escapeHtml(tgt.name)}</b>${tgt.persona ? ` · ${tgt.persona.icon} ${tgt.persona.name}` : ''} · ${tgt.stats.kills} elims` : 'Eliminated'}</div><div class="spec-btns"><button data-act="next">Next player (Space / Click)</button><button data-act="leave">Leave match</button></div>`;
+      const html = `<div class="spec-title">${tgt ? `Spectating <b>${escapeHtml(tgt.name)}</b>${tgt.persona ? ` · ${tgt.persona.icon} ${tgt.persona.name}${tgt.persona.traits && tgt.persona.traits.length ? ' · ' + tgt.persona.traits.join(' · ') : ''}` : ''} · ${tgt.stats.kills} elims` : 'Eliminated'}</div><div class="spec-btns"><button data-act="next">Next player (Space / Click)</button><button data-act="leave">Leave match</button></div>`;
       if (this.cache.spec !== html) { this.cache.spec = html; this.el.spectate.innerHTML = html; }
     }
 
